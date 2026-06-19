@@ -5,6 +5,7 @@ use crate::model::ControlMJob;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransferProtocol {
     Ftp,
+    FtpSsl,
     Sftp,
     Local,
     Unknown(String),
@@ -14,9 +15,37 @@ impl std::fmt::Display for TransferProtocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Ftp => write!(f, "FTP"),
+            Self::FtpSsl => write!(f, "FTP-SSL"),
             Self::Sftp => write!(f, "SFTP"),
             Self::Local => write!(f, "LOCAL"),
             Self::Unknown(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+/// How a FileWatch job locates its target file.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileWatchMode {
+    /// File lives on the agent node's local filesystem — poll via SSHOperator/PsrpOperator
+    Local,
+    /// File on an SFTP server — use SFTPSensor (Airflow worker connects directly)
+    Sftp,
+    /// File on an FTP server — use FTPSensor (covers plain FTP and FTP-SSL via FTPHook TLS)
+    Ftp,
+    /// File in AWS S3 — use S3KeySensor
+    S3,
+    /// File in Azure Blob Storage — use WasbBlobSensor
+    Blob,
+}
+
+impl std::fmt::Display for FileWatchMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local => write!(f, "LOCAL"),
+            Self::Sftp  => write!(f, "SFTP"),
+            Self::Ftp   => write!(f, "FTP"),
+            Self::S3    => write!(f, "S3"),
+            Self::Blob  => write!(f, "BLOB"),
         }
     }
 }
@@ -44,7 +73,7 @@ impl std::fmt::Display for AwsServiceType {
 pub enum JobPattern {
     BashJob,
     FileTransfer { protocol: TransferProtocol },
-    FileWatcher,
+    FileWatcher { mode: FileWatchMode },
     AwsJob { service: AwsServiceType },
     CyclicJob { interval_secs: u64 },
     AlreadyAirflow,
@@ -57,7 +86,7 @@ impl JobPattern {
         match self {
             Self::BashJob => "BashJob",
             Self::FileTransfer { .. } => "FileTransfer",
-            Self::FileWatcher => "FileWatcher",
+            Self::FileWatcher { .. } => "FileWatcher",
             Self::AwsJob { .. } => "AwsJob",
             Self::CyclicJob { .. } => "CyclicJob",
             Self::AlreadyAirflow => "AlreadyAirflow",
@@ -68,6 +97,10 @@ impl JobPattern {
 
     pub fn is_auto_converted(&self) -> bool {
         !matches!(self, Self::ManualReview { .. })
+    }
+
+    pub fn filewatch_mode(&self) -> Option<&FileWatchMode> {
+        if let Self::FileWatcher { mode } = self { Some(mode) } else { None }
     }
 }
 
@@ -107,7 +140,10 @@ pub fn classify_job(job: &ControlMJob) -> JobPattern {
             warn!(job = %job.jobname, "ManualReview: bim_sla_checkpoint");
             return JobPattern::ManualReview { reason: "bim_sla_checkpoint".into() };
         }
-        "filewatch" => return JobPattern::FileWatcher,
+        "filewatch" => {
+            let mode = derive_filewatch_mode(job);
+            return JobPattern::FileWatcher { mode };
+        }
         "file_trans" => {
             let protocol = derive_transfer_protocol(job);
             if let TransferProtocol::Unknown(ref p) = protocol {
@@ -226,21 +262,58 @@ fn derive_transfer_protocol(job: &ControlMJob) -> TransferProtocol {
         .map(|s| s.to_ascii_uppercase());
 
     match conntype.as_deref() {
-        Some("FTP") => TransferProtocol::Ftp,
-        Some("SFTP") => TransferProtocol::Sftp,
-        Some("LOCAL") => TransferProtocol::Local,
-        Some(other) => TransferProtocol::Unknown(other.to_string()),
+        Some("FTP")     => TransferProtocol::Ftp,
+        Some("FTP-SSL") => TransferProtocol::FtpSsl,
+        Some("SFTP")    => TransferProtocol::Sftp,
+        Some("LOCAL")   => TransferProtocol::Local,
+        Some(other)     => TransferProtocol::Unknown(other.to_string()),
         None => {
-            // Fall back to CONNTYPE1
             let conn1 = job.variables.get("%%FTP-CONNTYPE1").map(|s| s.to_ascii_uppercase());
             match conn1.as_deref() {
-                Some("FTP") => TransferProtocol::Ftp,
-                Some("SFTP") => TransferProtocol::Sftp,
-                Some("LOCAL") => TransferProtocol::Local,
-                _ => TransferProtocol::Ftp, // Default assumption for FILE_TRANS
+                Some("FTP")     => TransferProtocol::Ftp,
+                Some("FTP-SSL") => TransferProtocol::FtpSsl,
+                Some("SFTP")    => TransferProtocol::Sftp,
+                Some("LOCAL")   => TransferProtocol::Local,
+                _               => TransferProtocol::Ftp,
             }
         }
     }
+}
+
+fn derive_filewatch_mode(job: &ControlMJob) -> FileWatchMode {
+    let vars = &job.variables;
+
+    // Check explicit connection type variable
+    let conntype = vars
+        .get("%%FileWatch-CONNTYPE")
+        .or_else(|| vars.get("%%FileWatch-CONNECTION_TYPE"))
+        .map(|s| s.to_ascii_uppercase());
+
+    if let Some(ref ct) = conntype {
+        match ct.as_str() {
+            "SFTP"              => return FileWatchMode::Sftp,
+            "FTP" | "FTP-SSL"  => return FileWatchMode::Ftp,
+            "S3"               => return FileWatchMode::S3,
+            "BLOB" | "AZURE"   => return FileWatchMode::Blob,
+            "LOCAL"            => return FileWatchMode::Local,
+            _ => {}
+        }
+    }
+
+    // Infer from file path prefix
+    let path = vars
+        .get("%%FileWatch-FILE_PATH")
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    if path.starts_with("sftp://")       { return FileWatchMode::Sftp; }
+    if path.starts_with("ftp://")
+    || path.starts_with("ftps://")       { return FileWatchMode::Ftp; }
+    if path.starts_with("s3://")         { return FileWatchMode::S3; }
+    if path.contains(".blob.core")       { return FileWatchMode::Blob; }
+
+    // Default: local file on agent node
+    FileWatchMode::Local
 }
 
 fn derive_aws_service(job: &ControlMJob) -> AwsServiceType {

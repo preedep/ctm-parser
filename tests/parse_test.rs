@@ -68,7 +68,7 @@ fn filewatcher_classified_correctly() {
     let job = &folders[0].jobs[0];
 
     let pattern = classify_job(job);
-    assert!(matches!(pattern, JobPattern::FileWatcher), "expected FileWatcher, got {:?}", pattern.name());
+    assert!(matches!(pattern, JobPattern::FileWatcher { .. }), "expected FileWatcher, got {:?}", pattern.name());
 }
 
 #[test]
@@ -85,6 +85,7 @@ fn filewatcher_ir_plugin_config() {
     let cfg = ir.dag_config.as_ref().unwrap().plugin_config.as_ref().unwrap();
     assert!(cfg["file_path"].as_str().unwrap().contains("{{ ds_nodash }}"),
         "FILE_PATH should have %%$ODATE substituted");
+    assert_eq!(cfg["watch_mode"].as_str().unwrap(), "LOCAL");
     assert_eq!(cfg["mode"].as_str().unwrap(), "CREATE");
     assert_eq!(cfg["poke_interval_sec"].as_u64().unwrap(), 60);
 }

@@ -56,37 +56,42 @@ Real export: `export_xml_260612.xml`
 |---|---|
 | Folders processed | 6,164 |
 | Total jobs | 30,297 |
-| Auto-converted | 17,544 (57.9%) |
-| Requires manual review | 12,753 (42.1%) |
+| Auto-converted | 26,265 (86.7%) |
+| Requires manual review | 4,032 (13.3%) |
 | Parse errors | 0 |
 
 ---
 
 ## Migration result breakdown
 
-### Auto-converted jobs — 17,544 (57.9%)
+### Auto-converted jobs — 26,265 (86.7%)
 
 These jobs produce a DAG file without human intervention.
 
-All jobs execute remotely on agent nodes — the worker pod never runs commands locally or transfers files directly. Agent OS determines the operator: Linux/Unix → `SSHOperator`, Windows → `PsrpOperator`.
+All jobs execute remotely on agent nodes — the worker pod never runs commands locally or transfers files directly. Agent OS determines the remote execution operator: Linux/Unix → `SSHOperator`, Windows → `PsrpOperator`.
 
-| Pattern | Count | Operator (Linux agent) | Operator (Windows agent) |
-|---|---|---|---|
-| `BashJob` | 11,958 | `SSHOperator` | `PsrpOperator` |
-| `CyclicJob` | 2,334 | same as underlying `APPL_TYPE` + DAG `schedule=timedelta(N)` | same |
-| `FileTransfer` | 2,421 | `SSHOperator` (runs `lftp`/`sftp` on agent) | `PsrpOperator` (PowerShell on agent) |
-| `FileWatcher` | 144 | `SSHOperator` (polling loop on agent) | `PsrpOperator` (polling loop on agent) |
-| `AwsJob` | 556 | `StepFunctionStartExecutionOperator` / `LambdaInvokeFunctionOperator` | same |
-| `AlreadyAirflow` | 51 | `TriggerDagRunOperator` | same |
-| `DependencyGate` | 80 | `EmptyOperator` | same |
+| Pattern | Count | Operator |
+|---|---|---|
+| `BashJob` | ~11,958 | `SSHOperator` (linux) / `PsrpOperator` (windows) |
+| `CyclicJob` | ~2,334 | same as underlying `APPL_TYPE` + DAG `schedule=timedelta(N)` |
+| `FileTransfer (FTP/FTP-SSL/SFTP/LOCAL)` | ~10,667 | `SSHOperator` or `PsrpOperator` — agent executes `lftp`/PowerShell |
+| `FileWatcher (LOCAL)` | ~144 | `SSHOperator` or `PsrpOperator` — polling loop on agent node |
+| `FileWatcher (SFTP)` | — | `SFTPSensor` — Airflow worker connects to SFTP server directly |
+| `FileWatcher (FTP/FTP-SSL)` | — | `FTPSensor` — Airflow worker connects to FTP server directly |
+| `FileWatcher (S3)` | — | `S3KeySensor` |
+| `FileWatcher (BLOB)` | — | `WasbBlobSensor` |
+| `AwsJob` | ~556 | `StepFunctionStartExecutionOperator` / `LambdaInvokeFunctionOperator` |
+| `AlreadyAirflow` | ~51 | `TriggerDagRunOperator` |
+| `DependencyGate` | ~80 | `EmptyOperator` |
 
-### Manual review jobs — 12,753 (42.1%)
+**FileWatcher operator selection rule:** If `%%FileWatch-CONNTYPE` (or file path prefix) indicates SFTP/FTP/S3/BLOB, use the corresponding Airflow sensor — the worker pod connects directly to that service. If `LOCAL` or absent, the file lives on the agent node; poll it via `SSHOperator`/`PsrpOperator` depending on agent OS.
+
+### Manual review jobs — 4,032 (13.3%)
 
 These jobs cannot be auto-converted. They are excluded from DAG generation and listed in `migration_summary.json` with a reason code for the migration engineer.
 
 | Reason | Count | Root cause | Recommended action |
 |---|---|---|---|
-| `unknown_transfer_protocol:FTP-SSL` | 8,721 | FILE_TRANS jobs using FTP-SSL — no standard Airflow provider | Add FTP-SSL provider or rewrite as `BashOperator` with `curl --ftp-ssl` |
 | `complex_cyclic_sequence` | 1,401 | `CYCLIC=1` with a variable interval sequence, not a fixed interval | Build custom Airflow timetable or redesign as event-driven |
 | `named_calendar:DAYSCAL` | 1,113 | Schedule driven by a named calendar — cannot derive a cron expression | Translate calendar to cron or implement a custom `Timetable` |
 | `complex_cyclic_times` | 743 | `CYCLIC=1` with multiple specific run times, not a single interval | Same as `complex_cyclic_sequence` |

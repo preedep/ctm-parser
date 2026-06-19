@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::classifier::{AwsServiceType, JobPattern, TransferProtocol};
+use crate::classifier::{AwsServiceType, FileWatchMode, JobPattern, TransferProtocol};
 use crate::model::{ControlMJob, OnAction, ShoutConfig};
 
 #[derive(Debug, serde::Serialize)]
@@ -271,11 +271,14 @@ fn derive_operator(job: &ControlMJob, pattern: &JobPattern) -> (String, Option<S
             let cmd = job.cmdline.as_deref().map(substitute_tokens);
             (remote_op.into(), cmd, None)
         }
-        JobPattern::FileWatcher => {
-            let cfg = build_filewatcher_config(job);
-            (remote_op.into(), None, Some(cfg))
+        JobPattern::FileWatcher { mode } => {
+            let op = filewatch_operator(mode, remote_op);
+            let cfg = build_filewatcher_config(job, mode);
+            (op.into(), None, Some(cfg))
         }
         JobPattern::FileTransfer { protocol } => {
+            // FTP-SSL: use SSHOperator/PsrpOperator with lftp --ftps on agent node
+            // (no native FTP-SSL operator; FTPSensor covers FTP/FTP-SSL for file-wait only)
             let cfg = build_filetrans_config(job, protocol);
             (remote_op.into(), None, Some(cfg))
         }
@@ -325,13 +328,22 @@ pub fn substitute_tokens(cmd: &str) -> String {
     result
 }
 
-fn build_filewatcher_config(job: &ControlMJob) -> Value {
+fn filewatch_operator(mode: &FileWatchMode, remote_op: &str) -> String {
+    match mode {
+        FileWatchMode::Local => remote_op.to_string(),  // poll via SSH/PSRP on agent
+        FileWatchMode::Sftp  => "SFTPSensor".to_string(),
+        FileWatchMode::Ftp   => "FTPSensor".to_string(),
+        FileWatchMode::S3    => "S3KeySensor".to_string(),
+        FileWatchMode::Blob  => "WasbBlobSensor".to_string(),
+    }
+}
+
+fn build_filewatcher_config(job: &ControlMJob, mode: &FileWatchMode) -> Value {
     let vars = &job.variables;
     let file_path = vars
         .get("%%FileWatch-FILE_PATH")
         .map(|s| substitute_tokens(s))
         .unwrap_or_default();
-    let mode = vars.get("%%FileWatch-MODE").cloned().unwrap_or_else(|| "CREATE".into());
     let timeout_hours: f64 = vars
         .get("%%FileWatch-TIME_LIMIT")
         .and_then(|v| v.parse().ok())
@@ -345,9 +357,11 @@ fn build_filewatcher_config(job: &ControlMJob) -> Value {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
 
+    let watch_mode_var = vars.get("%%FileWatch-MODE").cloned().unwrap_or_else(|| "CREATE".into());
     serde_json::json!({
+        "watch_mode": mode.to_string(),
         "file_path": file_path,
-        "mode": mode,
+        "mode": watch_mode_var,
         "timeout_hours": timeout_hours,
         "poke_interval_sec": poke_secs,
         "min_size_bytes": min_size

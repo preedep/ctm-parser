@@ -11,7 +11,7 @@ Control-M concept, attribute, and pattern maps to an Airflow equivalent.
 |---|---|---|---|
 | Scheduling unit | `FOLDER` | Workflow definition | `DAG` |
 | Executable unit | `JOB` | Unit of work | `Task` / `Operator` |
-| Job type | `APPL_TYPE` | Operator class | `BashOperator`, `FileSensor`, etc. |
+| Job type | `APPL_TYPE` | Operator class | `SSHOperator`, `SFTPSensor`, `FTPSensor`, etc. |
 | Upstream dependency | `INCOND` | Task dependency or cross-DAG wait | `>>` edge or `ExternalTaskSensor` |
 | Downstream signal | `OUTCOND` | Task completion signal | implicit on task success |
 | Execution schedule | `DAYS` + `TIMEFROM` | Cron expression | `schedule="0 2 * * *"` |
@@ -50,7 +50,11 @@ The agent OS is determined by looking up `NODEID` in the Airflow connection regi
 | JobPattern | Linux/Unix agent | Windows agent | Notes |
 |---|---|---|---|
 | `BashJob` | `SSHOperator` | `PsrpOperator` | `command` / `powershell` from CMDLINE after token substitution |
-| `FileWatcher` | `SSHOperator` | `PsrpOperator` | polling loop script on agent node; checks file existence |
+| `FileWatcher (LOCAL)` | `SSHOperator` | `PsrpOperator` | file on agent node — poll via SSH/PSRP loop; see section 2.4 |
+| `FileWatcher (SFTP)` | `SFTPSensor` | `SFTPSensor` | worker pod connects to SFTP server directly; no agent needed |
+| `FileWatcher (FTP/FTP-SSL)` | `FTPSensor` | `FTPSensor` | worker pod connects to FTP server directly; FTP-SSL via TLS in `FTPHook` |
+| `FileWatcher (S3)` | `S3KeySensor` | `S3KeySensor` | worker pod polls S3 directly |
+| `FileWatcher (BLOB)` | `WasbBlobSensor` | `WasbBlobSensor` | worker pod polls Azure Blob directly |
 | `FileTransfer` | `SSHOperator` | `PsrpOperator` | runs `lftp` / `sftp` / `scp` or PowerShell on agent node — see section 2.3 |
 | `AwsJob (STEP)` | `StepFunctionStartExecutionOperator` | same | `airflow.providers.amazon.aws.operators.step_function` — no agent needed |
 | `AwsJob (LAMBDA)` | `LambdaInvokeFunctionOperator` | same | `airflow.providers.amazon.aws.operators.lambda_function` |
@@ -113,6 +117,70 @@ PsrpOperator(
 )
 ```
 
+### 2.4 FileWatcher execution model
+
+FileWatcher operator choice depends on where the file lives:
+
+#### LOCAL mode — file on agent node filesystem
+
+```
+Worker Pod ──SSH/PSRP──▶ Agent Node ──poll──▶ local file
+```
+
+The DAG generator emits an `SSHOperator` (Linux) or `PsrpOperator` (Windows) with a polling loop command.
+
+Linux polling script:
+```bash
+timeout 18000 bash -c 'until test -f /data/input/file.dat; do sleep 60; done'
+```
+
+Windows polling script:
+```powershell
+$deadline = (Get-Date).AddHours(5)
+while (-not (Test-Path 'C:\data\input\file.dat')) {
+    if ((Get-Date) -gt $deadline) { exit 1 }
+    Start-Sleep 60
+}
+```
+
+#### SFTP mode
+
+```
+Worker Pod ──SFTP──▶ SFTP Server (file lives here)
+```
+
+```python
+SFTPSensor(
+    task_id="RT_JOB001",
+    sftp_conn_id="FTP_CONN_01",      # from %%FileWatch-ACCOUNT
+    path="/data/input/file.dat",
+    poke_interval=60,
+    timeout=18000,
+)
+```
+
+#### FTP / FTP-SSL mode
+
+`FTPSensor` uses `FTPHook` which supports TLS — covers both plain FTP and FTP-SSL with the same sensor.
+
+```python
+FTPSensor(
+    task_id="RT_JOB001",
+    ftp_conn_id="FTP_CONN_01",
+    path="/data/input/file.dat",
+    fail_on_transient_errors=True,
+    poke_interval=60,
+    timeout=18000,
+)
+```
+
+#### S3 / Blob mode
+
+```python
+S3KeySensor(task_id="...", bucket_name="my-bucket", bucket_key="path/file.dat", aws_conn_id="AWS_CONN_01")
+WasbBlobSensor(task_id="...", container_name="my-container", blob_name="path/file.dat", wasb_conn_id="MY_CONN")
+```
+
 ---
 
 ## 3. DAG-Level Attributes
@@ -146,7 +214,7 @@ TIMEFROM absent              →  hour=0, minute=0
 > **When is a sensor used vs a schedule?**
 > - `schedule=timedelta(...)` — the DAG recurs automatically; no sensor involved. Used for `CyclicJob`.
 > - `ExternalTaskSensor` — a task inside the DAG that waits for a specific upstream task in another DAG to finish. Comes from INCOND cross-folder dependencies, independent of whether the job is cyclic.
-> - `FileSensor` — a task that waits for a file to appear on disk. Only for `FileWatcher` (`APPL_TYPE=FileWatch`).
+> - `SFTPSensor` / `FTPSensor` / `S3KeySensor` / `WasbBlobSensor` — sensors used for `FileWatcher` when the target file is on a remote service accessible from the worker pod. For files on the agent node filesystem, `SSHOperator`/`PsrpOperator` with a polling loop is used instead.
 
 ---
 
@@ -250,13 +318,24 @@ The DAG generator reads these from `dag_config.plugin_config` in the IR.
 
 ### FileWatch (`%%FileWatch-*`)
 
-| Variable | IR field | Airflow FileSensor arg |
+`%%FileWatch-CONNTYPE` (or the file path prefix) determines `watch_mode` and therefore the operator:
+
+| `CONNTYPE` / path prefix | `watch_mode` | Operator |
 |---|---|---|
-| `%%FileWatch-FILE_PATH` | `plugin_config.file_path` | `filepath` |
-| `%%FileWatch-MODE` | `plugin_config.mode` | — (CREATE = wait for new file) |
-| `%%FileWatch-INT_FILE_SEARCHES` | `plugin_config.poke_interval_sec` | `poke_interval` |
-| `%%FileWatch-TIME_LIMIT` | `plugin_config.timeout_hours` | `timeout` |
-| `%%FileWatch-MIN_DET_SIZE` | `plugin_config.min_size_bytes` | custom check |
+| `LOCAL` or absent | `LOCAL` | `SSHOperator` (linux) / `PsrpOperator` (windows) |
+| `SFTP` or `sftp://` | `SFTP` | `SFTPSensor` |
+| `FTP`, `FTP-SSL`, `ftp://`, `ftps://` | `FTP` | `FTPSensor` |
+| `S3` or `s3://` | `S3` | `S3KeySensor` |
+| `BLOB`, `AZURE`, or `.blob.core` in path | `BLOB` | `WasbBlobSensor` |
+
+| Variable | IR field | Notes |
+|---|---|---|
+| `%%FileWatch-CONNTYPE` | `plugin_config.watch_mode` | primary mode selector |
+| `%%FileWatch-FILE_PATH` | `plugin_config.file_path` | supports `%%$ODATE` → `{{ ds_nodash }}` substitution |
+| `%%FileWatch-MODE` | `plugin_config.mode` | `CREATE` = wait for new file |
+| `%%FileWatch-INT_FILE_SEARCHES` | `plugin_config.poke_interval_sec` | polling interval in seconds |
+| `%%FileWatch-TIME_LIMIT` | `plugin_config.timeout_hours` | max wait before task fails |
+| `%%FileWatch-MIN_DET_SIZE` | `plugin_config.min_size_bytes` | minimum file size check |
 
 ### FILE_TRANS (`%%FTP-*`)
 

@@ -113,6 +113,7 @@ The DAG generator builds the shell command (`lftp`, `aws s3 cp`, `azcopy`, Power
 **FileWatcher:**
 ```json
 {
+  "watch_mode": "LOCAL",
   "file_path": "/data/input/FILE_{{ ds_nodash }}.CTL",
   "mode": "CREATE",
   "timeout_hours": 5,
@@ -121,7 +122,17 @@ The DAG generator builds the shell command (`lftp`, `aws s3 cp`, `azcopy`, Power
 }
 ```
 
-FileWatcher runs a polling loop script on the agent node via `SSHOperator` / `PsrpOperator` — it does NOT use Airflow's `FileSensor` (which would require the file to be accessible from the worker pod).
+`watch_mode` determines the operator. Derived from `%%FileWatch-CONNTYPE` or the file path prefix:
+
+| `watch_mode` | Operator | Connection |
+|---|---|---|
+| `LOCAL` | `SSHOperator` (linux) / `PsrpOperator` (windows) | File is on agent node filesystem; worker pod polls via SSH/PSRP |
+| `SFTP` | `SFTPSensor` | Airflow worker connects directly to SFTP server (`apache-airflow-providers-sftp`) |
+| `FTP` | `FTPSensor` | Airflow worker connects directly to FTP/FTP-SSL server (`apache-airflow-providers-ftp`) |
+| `S3` | `S3KeySensor` | Airflow worker checks S3 bucket directly |
+| `BLOB` | `WasbBlobSensor` | Airflow worker checks Azure Blob Storage directly |
+
+For `LOCAL` mode, `agent_os` in `dag_config` determines SSH vs PSRP.
 
 **AwsJob (StepFunctions):**
 ```json

@@ -200,11 +200,15 @@ fn split_folder(
     // Partition jobs
     let mut group_jobs: Vec<JobSummary> = Vec::new();
     for job in jobs {
+        // ManualReview jobs are written to manual_review/jobs/ — never to dag_singles/
+        if job.pattern == "ManualReview" {
+            continue;
+        }
         let summary = job_summary(job);
         if connected.contains(job.job_id.as_str()) {
             group_jobs.push(summary);
         } else {
-            // Isolated job — becomes its own single-task DAG
+            // Isolated auto-converted job — becomes its own single-task DAG
             let schedule = job.dag_config.as_ref().and_then(|c| c.schedule.clone());
             let timezone = job.dag_config.as_ref().and_then(|c| c.timezone.clone());
             singles.push(DagSingle {

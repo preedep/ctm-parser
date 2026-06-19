@@ -134,6 +134,10 @@ pub enum JobPattern {
 Full detail lives in `docs/ctm-to-airflow-mapping.md`. Key invariants to keep in mind when modifying code:
 
 - **1 FOLDER = 1 DAG** — never split a folder by connected components
+- **Execution model** — all jobs run remotely on agent nodes; worker pod only dispatches
+  - Linux/Unix agent (`NODEID`) → `SSHOperator`
+  - Windows agent (`NODEID`) → `PsrpOperator` (`apache-airflow-providers-microsoft-psrp`)
+  - `NODEID` maps to an Airflow connection ID; agent OS determined from connection registry
 - `unmapped_attrs` must always be emitted (even as `[]`) — never suppressed
 - Exit code 0 when jobs route to `ManualReview`; exit code 1 only on fatal IO/XML errors
 - `INCOND ODATE=PREV` → `execution_delta_days=1` in IR; `NEXT/STAT/****` → ManualReview
@@ -141,6 +145,8 @@ Full detail lives in `docs/ctm-to-airflow-mapping.md`. Key invariants to keep in
 - `OUTCOND ODATE=STAT` → `outcond_static=true` in IR (job still auto-converts)
 - `OUTCOND SIGN="-"` → ManualReview: `outcond_delete`
 - Condition suffix pattern: `{JOBNAME}-ENDED-OK` (32,378 cases); suffix never modified by parser
+- `CyclicJob` affects DAG `schedule=timedelta(N)` only — operator still derived from `APPL_TYPE` + `NODEID`
+- FileTransfer `transfer_type`: `onprem_to_onprem` / `onprem_to_cloud` / `cloud_to_cloud` — all execute via SSH/PSRP on agent/relay node
 
 ### Output directories
 

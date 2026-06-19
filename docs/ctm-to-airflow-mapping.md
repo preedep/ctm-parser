@@ -27,27 +27,91 @@ Control-M concept, attribute, and pattern maps to an Airflow equivalent.
 | SLA checkpoint | `APPL_TYPE=BIM` | — | ManualReview (no equivalent) |
 | Manual gate | `CONFIRM=1` | — | ManualReview (no equivalent) |
 | Variable substitution | `%%VAR` / `%%$ODATE` | Jinja2 template | `{{ var.value.VAR }}` / `{{ ds_nodash }}` |
+| Agent node | `NODEID` | Airflow connection ID | `ssh_conn_id` (Linux) or `psrp_conn_id` (Windows) |
+| Run-as user | `RUN_AS` | SSH/PSRP username in connection | configured in Airflow connection, not in DAG code |
 
 ---
 
 ## 2. JobPattern → Airflow Operator
 
-| JobPattern | Airflow Operator | Import | Notes |
+### 2.1 Execution model
+
+All jobs execute **remotely on agent nodes** — the Airflow worker pod never runs commands locally or transfers files directly. The operator choice depends on the agent node OS:
+
+| Agent OS | Operator | Provider package |
+|---|---|---|
+| Linux / Unix | `SSHOperator` | `apache-airflow-providers-ssh` |
+| Windows | `PsrpOperator` | `apache-airflow-providers-microsoft-psrp` |
+
+The agent OS is determined by looking up `NODEID` in the Airflow connection registry. Each `NODEID` maps to one Airflow connection (`ssh_conn_id` or `psrp_conn_id`).
+
+### 2.2 Pattern → operator mapping
+
+| JobPattern | Linux/Unix agent | Windows agent | Notes |
 |---|---|---|---|
-| `BashJob` | `BashOperator` | `airflow.operators.bash` | `bash_command` from CMDLINE after token substitution |
-| `FileWatcher` | `FileSensor` | `airflow.sensors.filesystem` | `filepath`, `poke_interval`, `timeout` from plugin vars |
-| `FileTransfer (FTP)` | `FTPOperator` | `airflow.providers.ftp.operators.ftp` | local/remote path, connection from `%%FTP-ACCOUNT` |
-| `FileTransfer (SFTP)` | `SFTPOperator` | `airflow.providers.sftp.operators.sftp` | same as FTP but SFTP provider |
-| `FileTransfer (LOCAL)` | `BashOperator` | `airflow.operators.bash` | `cp` / `mv` command |
-| `AwsJob (STEP)` | `StepFunctionStartExecutionOperator` | `airflow.providers.amazon.aws.operators.step_function` | state machine name, input JSON from payload vars |
-| `AwsJob (LAMBDA)` | `LambdaInvokeFunctionOperator` | `airflow.providers.amazon.aws.operators.lambda_function` | function name, payload |
-| `AwsJob (BATCH)` | `BatchOperator` | `airflow.providers.amazon.aws.operators.batch` | job name, queue, overrides |
-| `AlreadyAirflow` | `TriggerDagRunOperator` | `airflow.operators.trigger_dagrun` | `trigger_dag_id` from `%%UCM-DAGID` |
-| `DependencyGate` | `EmptyOperator` | `airflow.operators.empty` | `trigger_rule=TriggerRule.ALL_SUCCESS` |
-| `CyclicJob` | same as underlying `APPL_TYPE` | — | **Affects DAG schedule only** — not the operator. See note below. |
+| `BashJob` | `SSHOperator` | `PsrpOperator` | `command` / `powershell` from CMDLINE after token substitution |
+| `FileWatcher` | `SSHOperator` | `PsrpOperator` | polling loop script on agent node; checks file existence |
+| `FileTransfer` | `SSHOperator` | `PsrpOperator` | runs `lftp` / `sftp` / `scp` or PowerShell on agent node — see section 2.3 |
+| `AwsJob (STEP)` | `StepFunctionStartExecutionOperator` | same | `airflow.providers.amazon.aws.operators.step_function` — no agent needed |
+| `AwsJob (LAMBDA)` | `LambdaInvokeFunctionOperator` | same | `airflow.providers.amazon.aws.operators.lambda_function` |
+| `AwsJob (BATCH)` | `BatchOperator` | same | `airflow.providers.amazon.aws.operators.batch` |
+| `AlreadyAirflow` | `TriggerDagRunOperator` | same | `airflow.operators.trigger_dagrun` — `trigger_dag_id` from `%%UCM-DAGID` |
+| `DependencyGate` | `EmptyOperator` | same | `airflow.operators.empty` — `trigger_rule=TriggerRule.ALL_SUCCESS` |
+| `CyclicJob` | same as underlying `APPL_TYPE` | same | **Affects DAG schedule only** — not the operator. See note below. |
 | `ManualReview` | — | — | skip; emit to manual migration report |
 
-> **CyclicJob note:** `CyclicJob` is an orthogonal classification — it changes the DAG's `schedule` argument to `timedelta(seconds=N)` but does **not** determine the operator. The operator is derived from the job's `APPL_TYPE` exactly as for non-cyclic jobs (e.g. `APPL_TYPE=OS` → `BashOperator`, `APPL_TYPE=FILE_TRANS` → `FTPOperator`). A CyclicJob does **not** use a sensor — the Airflow scheduler fires it automatically on the interval. INCOND-derived `ExternalTaskSensor` tasks are still generated normally if the job has cross-folder dependencies.
+> **CyclicJob note:** `CyclicJob` is an orthogonal classification — it changes the DAG's `schedule` argument to `timedelta(seconds=N)` but does **not** determine the operator. The operator is derived from `APPL_TYPE` and `NODEID` exactly as for non-cyclic jobs. A CyclicJob does **not** use a sensor — the Airflow scheduler fires it automatically on the interval. INCOND-derived `ExternalTaskSensor` tasks are still generated normally if the job has cross-folder dependencies.
+
+### 2.3 FileTransfer execution model
+
+File transfer jobs always execute **on the agent node** — files never pass through the worker pod.
+
+#### On-premise → On-premise
+
+```
+Worker Pod ──SSH/PSRP──▶ Agent Node ──lftp/sftp/PowerShell──▶ Remote Host
+                         (files live here; transfer happens here)
+```
+
+| Agent OS | Tool | Example command |
+|---|---|---|
+| Linux/Unix | `lftp`, `sftp`, `scp` | `lftp -e "put /data/file.dat; bye" sftp://remote_host` |
+| Windows | PowerShell SFTP module | `Send-SFTPItem -SessionId $s -Path C:\data\file.dat` |
+
+#### On-premise → Cloud (and Cloud → Cloud)
+
+```
+Worker Pod ──SSH/PSRP──▶ Relay Server ──aws cli / azcopy──▶ S3 / Blob Storage
+                         (relay pulls from source and pushes to cloud)
+```
+
+| Target cloud | Linux relay tool | Windows relay tool |
+|---|---|---|
+| AWS S3 | `aws s3 cp` / `rclone` | PowerShell `Write-S3Object` |
+| Azure Blob | `azcopy` / `rclone` | PowerShell `azcopy` |
+
+The relay server is identified by `NODEID` in the IR. The DAG generator emits the same `SSHOperator` / `PsrpOperator` — only the command changes.
+
+#### SSHOperator args (Linux agent)
+
+```python
+SSHOperator(
+    task_id="RT_JOB001",
+    ssh_conn_id="agent01",          # Airflow connection = NODEID
+    command="lftp -e '...' sftp://remote_host",
+    cmd_timeout=3600,               # from MAXWAIT
+)
+```
+
+#### PsrpOperator args (Windows agent)
+
+```python
+PsrpOperator(
+    task_id="RT_JOB001",
+    psrp_conn_id="agent_win01",     # Airflow connection = NODEID
+    powershell="Send-SFTPItem ...", # PowerShell script
+)
+```
 
 ---
 

@@ -68,15 +68,17 @@ Real export: `export_xml_260612.xml`
 
 These jobs produce a DAG file without human intervention.
 
-| Pattern | Count | Airflow Operator |
-|---|---|---|
-| `BashJob` | 11,958 | `BashOperator` |
-| `CyclicJob` | 2,334 | operator from underlying `APPL_TYPE` + DAG `schedule=timedelta(N)` — no sensor |
-| `FileTransfer` | 2,421 | `FTPOperator` / `SFTPOperator` |
-| `FileWatcher` | 144 | `FileSensor` — waits for a file to appear on disk |
-| `AwsJob` | 556 | `StepFunctionStartExecutionOperator` / `LambdaInvokeFunctionOperator` |
-| `AlreadyAirflow` | 51 | `TriggerDagRunOperator` |
-| `DependencyGate` | 80 | `EmptyOperator` |
+All jobs execute remotely on agent nodes — the worker pod never runs commands locally or transfers files directly. Agent OS determines the operator: Linux/Unix → `SSHOperator`, Windows → `PsrpOperator`.
+
+| Pattern | Count | Operator (Linux agent) | Operator (Windows agent) |
+|---|---|---|---|
+| `BashJob` | 11,958 | `SSHOperator` | `PsrpOperator` |
+| `CyclicJob` | 2,334 | same as underlying `APPL_TYPE` + DAG `schedule=timedelta(N)` | same |
+| `FileTransfer` | 2,421 | `SSHOperator` (runs `lftp`/`sftp` on agent) | `PsrpOperator` (PowerShell on agent) |
+| `FileWatcher` | 144 | `SSHOperator` (polling loop on agent) | `PsrpOperator` (polling loop on agent) |
+| `AwsJob` | 556 | `StepFunctionStartExecutionOperator` / `LambdaInvokeFunctionOperator` | same |
+| `AlreadyAirflow` | 51 | `TriggerDagRunOperator` | same |
+| `DependencyGate` | 80 | `EmptyOperator` | same |
 
 ### Manual review jobs — 12,753 (42.1%)
 

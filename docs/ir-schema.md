@@ -53,11 +53,14 @@ One file per job: `job_{JOBNAME}.json` (or `.yaml`).
   "priority_weight": 100,
   "pool": "am_load_1",
   "pool_slots": 1,
-  "owner": "ctmsrv",
+  "owner": "svc_batch",
   "tags": ["MY_FOLDER", "APP_NAME", "SUB_APP"],
   "sla_sec": null,
-  "operator": "BashOperator",
-  "bash_command": "/batch/run.sh {{ ds_nodash }}",
+  "nodeid": "agent01",
+  "run_as": "svc_batch",
+  "agent_os": "linux",
+  "operator": "SSHOperator",
+  "command": "/batch/run.sh {{ ds_nodash }}",
   "plugin_config": { ... }
 }
 ```
@@ -77,8 +80,11 @@ One file per job: `job_{JOBNAME}.json` (or `.yaml`).
 | `owner` | string\|null | OWNER | |
 | `tags` | array | APPLICATION, SUB_APPLICATION, PARENT_FOLDER | |
 | `sla_sec` | int\|null | from SHOUT WHEN=EXECTIME, TIME field | |
-| `operator` | string | derived from pattern/appl_type | e.g. `BashOperator`, `FileSensor`, `SFTPOperator` |
-| `bash_command` | string\|null | CMDLINE after token substitution | BashJob only |
+| `nodeid` | string | NODEID | agent node name — maps to Airflow connection ID |
+| `run_as` | string\|null | RUN_AS | SSH/PSRP username — stored in connection, referenced here for audit |
+| `agent_os` | string | derived from connection registry by NODEID | `"linux"` → `SSHOperator`; `"windows"` → `PsrpOperator` |
+| `operator` | string | derived from pattern + agent_os | `SSHOperator`, `PsrpOperator`, `StepFunctionStartExecutionOperator`, etc. |
+| `command` | string\|null | CMDLINE after token substitution | for SSHOperator (`command=`) and PsrpOperator (`powershell=`) |
 | `plugin_config` | object\|null | plugin-specific fields | see below |
 
 ### plugin_config per pattern
@@ -86,8 +92,9 @@ One file per job: `job_{JOBNAME}.json` (or `.yaml`).
 **FileTransfer:**
 ```json
 {
-  "protocol": "FTP",
-  "account": "MY_CONN",
+  "protocol": "SFTP",
+  "transfer_type": "onprem_to_onprem",
+  "account": "FTP_CONN_01",
   "local_host": "agent01",
   "remote_host": "remote.host.example",
   "transfers": [
@@ -95,6 +102,13 @@ One file per job: `job_{JOBNAME}.json` (or `.yaml`).
   ]
 }
 ```
+
+`transfer_type` values:
+- `"onprem_to_onprem"` — both source and destination are on-premise hosts; command runs on agent node via `SSHOperator` / `PsrpOperator`
+- `"onprem_to_cloud"` — source is on-premise, destination is S3 / Azure Blob; command runs on relay server via `SSHOperator` / `PsrpOperator`
+- `"cloud_to_cloud"` — both endpoints are cloud storage; command runs on relay server via `SSHOperator` / `PsrpOperator`
+
+The DAG generator builds the shell command (`lftp`, `aws s3 cp`, `azcopy`, PowerShell) from `protocol`, `transfer_type`, and the `transfers[]` entries, then passes it as `command` to `SSHOperator` or `powershell` to `PsrpOperator`.
 
 **FileWatcher:**
 ```json
@@ -106,6 +120,8 @@ One file per job: `job_{JOBNAME}.json` (or `.yaml`).
   "min_size_bytes": 0
 }
 ```
+
+FileWatcher runs a polling loop script on the agent node via `SSHOperator` / `PsrpOperator` — it does NOT use Airflow's `FileSensor` (which would require the file to be accessible from the worker pod).
 
 **AwsJob (StepFunctions):**
 ```json

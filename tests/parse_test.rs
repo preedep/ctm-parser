@@ -40,7 +40,7 @@ fn bash_job_ir_has_correct_fields() {
     assert_eq!(config.retries, 2);
     assert_eq!(config.execution_timeout_sec, Some(5400)); // 90 min * 60
     assert_eq!(config.catchup, false);
-    assert!(config.bash_command.as_deref().map(|c| c.contains("{{ ds_nodash }}")).unwrap_or(false),
+    assert!(config.command.as_deref().map(|c| c.contains("{{ ds_nodash }}")).unwrap_or(false),
         "CMDLINE token %%$ODATE should be substituted");
 
     assert_eq!(ir.dependencies.upstream.len(), 1);

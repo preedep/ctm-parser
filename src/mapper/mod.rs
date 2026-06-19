@@ -20,8 +20,13 @@ pub struct DagConfig {
     pub owner: Option<String>,
     pub tags: Vec<String>,
     pub sla_sec: Option<u64>,
+    pub nodeid: String,
+    pub run_as: Option<String>,
+    /// "linux" → SSHOperator, "windows" → PsrpOperator
+    /// Placeholder derived from NODEID — actual OS resolved from connection registry at DAG gen time
+    pub agent_os: String,
     pub operator: String,
-    pub bash_command: Option<String>,
+    pub command: Option<String>,
     pub plugin_config: Option<Value>,
 }
 
@@ -43,7 +48,10 @@ fn build_config(job: &ControlMJob, pattern: &JobPattern) -> DagConfig {
         None
     };
 
-    let (operator, bash_command, plugin_config) = derive_operator(job, pattern);
+    let (operator, command, plugin_config) = derive_operator(job, pattern);
+    // agent_os is a placeholder — "windows" heuristic based on known Windows node prefixes.
+    // The DAG generator must resolve the authoritative OS from the Airflow connection registry.
+    let agent_os = derive_agent_os(job.nodeid.as_deref());
 
     DagConfig {
         schedule,
@@ -59,8 +67,11 @@ fn build_config(job: &ControlMJob, pattern: &JobPattern) -> DagConfig {
         owner: job.owner.clone(),
         tags,
         sla_sec,
+        nodeid: job.nodeid.clone().unwrap_or_default(),
+        run_as: job.run_as.clone(),
+        agent_os,
         operator,
-        bash_command,
+        command,
         plugin_config,
     }
 }
@@ -230,23 +241,43 @@ fn format_date(s: Option<&str>) -> Option<String> {
     }
 }
 
+/// Heuristic agent OS derivation from NODEID.
+/// The DAG generator MUST override this using the Airflow connection registry.
+fn derive_agent_os(nodeid: Option<&str>) -> String {
+    match nodeid {
+        Some(id) => {
+            let lower = id.to_ascii_lowercase();
+            // Known Windows node naming conventions — extend as needed
+            if lower.contains("win") || lower.contains("wnd") || lower.contains("-w-") || lower.ends_with("-w") {
+                "windows".into()
+            } else {
+                "linux".into()
+            }
+        }
+        None => "linux".into(),
+    }
+}
+
+fn ssh_or_psrp(agent_os: &str) -> &'static str {
+    if agent_os == "windows" { "PsrpOperator" } else { "SSHOperator" }
+}
+
 fn derive_operator(job: &ControlMJob, pattern: &JobPattern) -> (String, Option<String>, Option<Value>) {
+    let agent_os = derive_agent_os(job.nodeid.as_deref());
+    let remote_op = ssh_or_psrp(&agent_os);
+
     match pattern {
         JobPattern::BashJob => {
             let cmd = job.cmdline.as_deref().map(substitute_tokens);
-            ("BashOperator".into(), cmd, None)
+            (remote_op.into(), cmd, None)
         }
         JobPattern::FileWatcher => {
             let cfg = build_filewatcher_config(job);
-            ("FileSensor".into(), None, Some(cfg))
+            (remote_op.into(), None, Some(cfg))
         }
         JobPattern::FileTransfer { protocol } => {
-            let op = match protocol {
-                TransferProtocol::Sftp => "SFTPOperator",
-                _ => "FTPOperator",
-            };
             let cfg = build_filetrans_config(job, protocol);
-            (op.into(), None, Some(cfg))
+            (remote_op.into(), None, Some(cfg))
         }
         JobPattern::AwsJob { service } => {
             let op = match service {
@@ -263,8 +294,9 @@ fn derive_operator(job: &ControlMJob, pattern: &JobPattern) -> (String, Option<S
             ("TriggerDagRunOperator".into(), None, Some(cfg))
         }
         JobPattern::CyclicJob { .. } => {
+            // Schedule is timedelta — operator still comes from APPL_TYPE via recursive derive
             let cmd = job.cmdline.as_deref().map(substitute_tokens);
-            ("BashOperator".into(), cmd, None)
+            (remote_op.into(), cmd, None)
         }
         JobPattern::DependencyGate => ("EmptyOperator".into(), None, None),
         JobPattern::ManualReview { .. } => ("ManualReview".into(), None, None),
@@ -343,8 +375,12 @@ fn build_filetrans_config(job: &ControlMJob, protocol: &TransferProtocol) -> Val
         }));
     }
 
+    let remote_path = vars.get("%%FTP-RPATH1").map(|s| s.as_str()).unwrap_or("");
+    let transfer_type = derive_transfer_type(remote_path);
+
     serde_json::json!({
         "protocol": protocol.to_string(),
+        "transfer_type": transfer_type,
         "account": vars.get("%%FTP-ACCOUNT").cloned().unwrap_or_default(),
         "local_host": vars.get("%%FTP-LHOST").cloned().unwrap_or_default(),
         "remote_host": vars.get("%%FTP-RHOST").cloned().unwrap_or_default(),
@@ -401,6 +437,17 @@ fn build_airflow_config(job: &ControlMJob) -> Value {
     })
 }
 
+/// Derive transfer_type from remote path pattern.
+/// DAG generator may override once it knows both endpoints.
+fn derive_transfer_type(remote_path: &str) -> &'static str {
+    let lower = remote_path.to_ascii_lowercase();
+    if lower.starts_with("s3://") || lower.starts_with("gs://") || lower.contains(".blob.core") {
+        "onprem_to_cloud"
+    } else {
+        "onprem_to_onprem"
+    }
+}
+
 /// Decode URL-encoded characters in AWS payload values (%4E → \n)
 fn decode_url_encoded(s: &str) -> String {
     percent_encoding::percent_decode_str(s)
@@ -412,7 +459,7 @@ fn decode_url_encoded(s: &str) -> String {
 pub fn build_callbacks(job: &ControlMJob) -> serde_json::Value {
     let mut on_failure: Vec<Value> = Vec::new();
     let mut on_success: Vec<Value> = Vec::new();
-    let mut sla_alerts: Vec<Value> = Vec::new();
+    let mut deadline_alerts: Vec<Value> = Vec::new();
 
     // SHOUT-based callbacks
     for s in &job.shout {
@@ -435,7 +482,7 @@ pub fn build_callbacks(job: &ControlMJob) -> serde_json::Value {
                 if let Some(obj) = alert.as_object_mut() {
                     obj.insert("threshold_min".into(), threshold_min.into());
                 }
-                sla_alerts.push(alert);
+                deadline_alerts.push(alert);
             }
             _ => {}
         }
@@ -477,7 +524,7 @@ pub fn build_callbacks(job: &ControlMJob) -> serde_json::Value {
     serde_json::json!({
         "on_failure": on_failure,
         "on_success": on_success,
-        "sla_alerts": sla_alerts
+        "deadline_alerts": deadline_alerts
     })
 }
 

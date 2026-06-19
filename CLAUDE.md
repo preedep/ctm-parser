@@ -273,6 +273,7 @@ A job is isolated (→ `dag_singles/`) if it appears in **neither** side of any 
 | `docs/patterns.md` | `JobPattern` classification decision tree, ManualReview trigger list |
 | `docs/ir-schema.md` | JobIR JSON schema with `plugin_config` shapes per pattern |
 | `docs/xml-examples.md` | Real XML snippets for every job type (fixture reference) |
+| `docs/ctm-to-airflow-mapping.md` | Primary DAG generator reference: concept mapping, operator selection, dependency wiring, token substitution, generation algorithm, ManualReview action guide |
 
 ## Coding conventions
 

@@ -241,8 +241,9 @@ The DAG generator reads these from `dag_config.plugin_config` in the IR.
 
 ## 9. DAG Generator Input → Output
 
-The DAG generator reads from `output/dag_groups/` and `output/dag_groups_external/`
-(each a `{FOLDER_NAME}.json`) and produces one `{FOLDER_NAME}.py` per manifest.
+The DAG generator reads from `output/auto_converted/dag_groups/` and
+`output/auto_converted/dag_groups_external/` (each a `{FOLDER_NAME}.json`) and
+produces one `{FOLDER_NAME}.py` per manifest. Never read from `manual_review/`.
 
 ### Input manifest structure
 
@@ -324,9 +325,9 @@ with DAG(
 ### Generation algorithm
 
 ```
-for each manifest in dag_groups/ and dag_groups_external/:
+for each manifest in auto_converted/dag_groups/ and auto_converted/dag_groups_external/:
 
-  1. Read job IR files from jobs/ for each job in manifest.jobs
+  1. Read job IR files from auto_converted/jobs/ for each job in manifest.jobs
   2. Emit DAG header (dag_id, schedule, start_date, catchup, timezone, tags)
   3. For each external_sensor:
        emit ExternalTaskSensor(
@@ -346,7 +347,7 @@ for each manifest in dag_groups/ and dag_groups_external/:
        for each external_sensor, find jobs that have it in their upstream
        emit: wait_{source_job} >> {in_job}
 
-for each manifest in dag_singles/:
+for each manifest in auto_converted/dag_singles/:
   emit single-task DAG (no edges, no sensors)
 ```
 

@@ -146,14 +146,20 @@ Full detail lives in `docs/ctm-to-airflow-mapping.md`. Key invariants to keep in
 
 ```
 output/
-├── jobs/                    job_{JOBNAME}.json — one IR file per job
-├── dag_groups/              folder DAGs with intra-folder edges only
-├── dag_groups_external/     folder DAGs requiring ExternalTaskSensor
-├── dag_singles/             isolated jobs: no edges, no sensors
+├── auto_converted/
+│   ├── jobs/                job IR files for auto-converted jobs only
+│   ├── dag_groups/          self-contained DAGs (intra-folder edges only)
+│   ├── dag_groups_external/ DAGs requiring ExternalTaskSensor
+│   └── dag_singles/         isolated single-task DAGs
+├── manual_review/
+│   └── jobs/                job IR files for ManualReview jobs (human audit)
 └── migration_summary.json
 ```
 
-A job is isolated (→ `dag_singles/`) if it has no intra-folder edges, is not referenced by any external sensor, and is not a cross-folder producer (its OUTCOND consumed by a job in a different folder).
+- DAG generator reads from `auto_converted/` only — never touches `manual_review/`
+- `manual_review/jobs/` is the migration engineer's backlog; `ls | wc -l` = remaining work
+- Grouper resolution uses all IRs (including ManualReview) to build the OUTCOND index correctly, but only writes connected/isolated DAG manifests for auto-converted jobs
+- A job is isolated (→ `dag_singles/`) if it has no intra-folder edges, is not referenced by any external sensor, and is not a cross-folder producer (its OUTCOND consumed by a job in a different folder)
 
 ## Reference documents
 

@@ -18,10 +18,13 @@ cargo run --release -- --input dataset/export_xml_260612.xml --output ./output/ 
 
 ```
 output/
-├── jobs/                    one IR file per job: job_{JOBNAME}.json
-├── dag_groups/              self-contained DAGs (intra-folder edges only)
-├── dag_groups_external/     DAGs requiring ExternalTaskSensor (cross-folder)
-├── dag_singles/             isolated jobs with no dependencies
+├── auto_converted/
+│   ├── jobs/                IR files for auto-converted jobs
+│   ├── dag_groups/          self-contained DAGs (intra-folder edges only)
+│   ├── dag_groups_external/ DAGs requiring ExternalTaskSensor (cross-folder)
+│   └── dag_singles/         isolated single-task DAGs
+├── manual_review/
+│   └── jobs/                IR files for jobs requiring human action
 └── migration_summary.json
 ```
 
@@ -111,7 +114,12 @@ These jobs cannot be auto-converted. They are excluded from DAG generation and l
 | `INCOND`/`OUTCOND` across folders | `ExternalTaskSensor` |
 | Unlinked jobs in same folder | Independent parallel tasks |
 
-Output is split into three tiers for the DAG generator to tackle in order of complexity:
+Output is split into two top-level buckets, then three tiers within `auto_converted/`:
+
+- **`auto_converted/`** — DAG generator reads only from here
+- **`manual_review/`** — migration engineer's backlog; `ls jobs/ | wc -l` = remaining work
+
+Within `auto_converted/`, three tiers by complexity:
 
 1. **`dag_groups/`** — fully self-contained; no cross-DAG wiring needed
 2. **`dag_groups_external/`** — requires `ExternalTaskSensor` for cross-folder dependencies

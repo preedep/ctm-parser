@@ -44,12 +44,16 @@ fn main() -> Result<()> {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&args.log_level));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let jobs_dir = args.output.join("jobs");
-    let groups_dir = args.output.join("dag_groups");
-    let groups_ext_dir = args.output.join("dag_groups_external");
-    let singles_dir = args.output.join("dag_singles");
+    let ac_dir = args.output.join("auto_converted");
+    let mr_dir = args.output.join("manual_review");
 
-    for dir in [&jobs_dir, &groups_dir, &groups_ext_dir, &singles_dir] {
+    let jobs_dir = ac_dir.join("jobs");
+    let groups_dir = ac_dir.join("dag_groups");
+    let groups_ext_dir = ac_dir.join("dag_groups_external");
+    let singles_dir = ac_dir.join("dag_singles");
+    let mr_jobs_dir = mr_dir.join("jobs");
+
+    for dir in [&jobs_dir, &groups_dir, &groups_ext_dir, &singles_dir, &mr_jobs_dir] {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("cannot create {:?}", dir))?;
     }
@@ -73,9 +77,10 @@ fn main() -> Result<()> {
             let pattern = classify_job(job);
             let ir = build_ir(job, &folder.datacenter, &pattern);
 
+            let dest = if ir.pattern == "ManualReview" { &mr_jobs_dir } else { &jobs_dir };
             let write_result = match args.format {
-                OutputFormat::Json => write_ir_json(&ir, &jobs_dir),
-                OutputFormat::Yaml => write_ir_yaml(&ir, &jobs_dir),
+                OutputFormat::Json => write_ir_json(&ir, dest),
+                OutputFormat::Yaml => write_ir_yaml(&ir, dest),
             };
 
             if let Err(e) = write_result {
@@ -88,7 +93,9 @@ fn main() -> Result<()> {
         }
     }
 
-    info!(jobs = irs.len(), "job IR files written to jobs/");
+    let ac_count = irs.iter().filter(|ir| ir.pattern != "ManualReview").count();
+    let mr_count = irs.len() - ac_count;
+    info!(auto_converted = ac_count, manual_review = mr_count, "job IR files written");
 
     // Stage 2 — resolve dependencies, split into groups / groups_external / singles
     let result = build_dag_groups(&irs);

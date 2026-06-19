@@ -44,8 +44,10 @@ Control-M concept, attribute, and pattern maps to an Airflow equivalent.
 | `AwsJob (BATCH)` | `BatchOperator` | `airflow.providers.amazon.aws.operators.batch` | job name, queue, overrides |
 | `AlreadyAirflow` | `TriggerDagRunOperator` | `airflow.operators.trigger_dagrun` | `trigger_dag_id` from `%%UCM-DAGID` |
 | `DependencyGate` | `EmptyOperator` | `airflow.operators.empty` | `trigger_rule=TriggerRule.ALL_SUCCESS` |
-| `CyclicJob` | same as underlying pattern | — | `schedule=timedelta(seconds=N)` on the DAG |
+| `CyclicJob` | same as underlying `APPL_TYPE` | — | **Affects DAG schedule only** — not the operator. See note below. |
 | `ManualReview` | — | — | skip; emit to manual migration report |
+
+> **CyclicJob note:** `CyclicJob` is an orthogonal classification — it changes the DAG's `schedule` argument to `timedelta(seconds=N)` but does **not** determine the operator. The operator is derived from the job's `APPL_TYPE` exactly as for non-cyclic jobs (e.g. `APPL_TYPE=OS` → `BashOperator`, `APPL_TYPE=FILE_TRANS` → `FTPOperator`). A CyclicJob does **not** use a sensor — the Airflow scheduler fires it automatically on the interval. INCOND-derived `ExternalTaskSensor` tasks are still generated normally if the job has cross-folder dependencies.
 
 ---
 
@@ -67,6 +69,7 @@ Control-M concept, attribute, and pattern maps to an Airflow equivalent.
 
 ```
 CYCLIC=1 + INTERVAL=00015M   →  schedule=timedelta(seconds=900)
+                                 (Airflow scheduler fires on this interval — no sensor needed)
 DAYSCAL / CONFCAL present    →  ManualReview (cannot derive)
 DAYS=ALL + WEEKDAYS=ALL      →  schedule="<minute> <hour> * * *"
 DAYS=1,15 + WEEKDAYS=ALL     →  schedule="<minute> <hour> 1,15 * *"
@@ -75,6 +78,11 @@ DAYS=1,15 + WEEKDAYS=1 + DAYS_AND_OR=A  →  schedule="<minute> <hour> 1,15 * 1"
 TIMEFROM=0200                →  hour=2, minute=0
 TIMEFROM absent              →  hour=0, minute=0
 ```
+
+> **When is a sensor used vs a schedule?**
+> - `schedule=timedelta(...)` — the DAG recurs automatically; no sensor involved. Used for `CyclicJob`.
+> - `ExternalTaskSensor` — a task inside the DAG that waits for a specific upstream task in another DAG to finish. Comes from INCOND cross-folder dependencies, independent of whether the job is cyclic.
+> - `FileSensor` — a task that waits for a file to appear on disk. Only for `FileWatcher` (`APPL_TYPE=FileWatch`).
 
 ---
 

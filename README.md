@@ -71,9 +71,9 @@ These jobs produce a DAG file without human intervention.
 | Pattern | Count | Airflow Operator |
 |---|---|---|
 | `BashJob` | 11,958 | `BashOperator` |
-| `CyclicJob` | 2,334 | any operator + `schedule=timedelta(N)` |
+| `CyclicJob` | 2,334 | operator from underlying `APPL_TYPE` + DAG `schedule=timedelta(N)` — no sensor |
 | `FileTransfer` | 2,421 | `FTPOperator` / `SFTPOperator` |
-| `FileWatcher` | 144 | `FileSensor` |
+| `FileWatcher` | 144 | `FileSensor` — waits for a file to appear on disk |
 | `AwsJob` | 556 | `StepFunctionStartExecutionOperator` / `LambdaInvokeFunctionOperator` |
 | `AlreadyAirflow` | 51 | `TriggerDagRunOperator` |
 | `DependencyGate` | 80 | `EmptyOperator` |

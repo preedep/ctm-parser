@@ -140,7 +140,7 @@ If INTERVAL is missing or malformed when CYCLIC=1 → `ManualReview("invalid_int
 | `DependencyGate` | ~300 (est.) | TASKTYPE=Dummy, APPL_TYPE=OS, no CMDLINE |
 | `ManualReview` | ~680 (target) | BIM + complex scheduling + confirm + other triggers |
 
-Note: `CyclicJob` is an orthogonal property — a cyclic FileTransfer job should be classified as `CyclicJob` (cyclic takes precedence in the decision tree since it affects the DAG schedule fundamentally).
+Note: `CyclicJob` is an orthogonal property — a cyclic FileTransfer job is classified as `CyclicJob` because cyclic takes precedence (it affects the DAG schedule fundamentally). The operator is still derived from `APPL_TYPE` (e.g. FILE_TRANS → FTPOperator). `CyclicJob` changes `schedule=timedelta(seconds=N)` on the DAG; it does NOT use a sensor. INCOND-derived `ExternalTaskSensor` tasks are generated independently if the job has cross-folder dependencies.
 
 ---
 
@@ -149,6 +149,7 @@ Note: `CyclicJob` is an orthogonal property — a cyclic FileTransfer job should
 - Check ManualReview triggers first before committing to any positive pattern — collect all reasons, don't short-circuit.
 - All string comparisons must use `to_ascii_lowercase()`.
 - APPL_TYPE absent or empty → treat as `"os"`.
-- A job can have `CYCLIC=1` and `APPL_TYPE=FILE_TRANS` → `CyclicJob` wins (the cyclic schedule is the primary structural concern; the file transfer detail is in `dag_config`).
+- A job can have `CYCLIC=1` and `APPL_TYPE=FILE_TRANS` → `CyclicJob` wins (the cyclic schedule is the primary structural concern; the file transfer operator detail is still derived from `APPL_TYPE` and stored in `dag_config.plugin_config`).
+- `CyclicJob` → `schedule=timedelta(seconds=N)` on the DAG. No sensor. The Airflow scheduler fires it on the interval automatically. Do not confuse with `FileSensor` (FileWatcher) or `ExternalTaskSensor` (cross-folder INCOND) — those are dependency constructs, not schedule constructs.
 - `DependencyGate` jobs produce minimal IR — `pattern: "DependencyGate"`, `dag_config: null`, `dependencies` wired normally.
 - Log `tracing::warn!` for every ManualReview trigger found.

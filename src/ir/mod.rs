@@ -178,19 +178,39 @@ fn collect_unmapped(job: &ControlMJob, pattern: &JobPattern) -> Vec<String> {
 }
 
 pub fn write_ir_json(ir: &JobIr, output_dir: &Path) -> Result<(), ParseError> {
-    let safe_name = ir.job_id.replace(['/', '\\', ':'], "_");
-    let path = output_dir.join(format!("job_{}.json", safe_name));
+    let path = unique_path(output_dir, &ir_stem(ir), "json");
     let json = serde_json::to_string_pretty(ir)?;
     std::fs::write(path, json)?;
     Ok(())
 }
 
 pub fn write_ir_yaml(ir: &JobIr, output_dir: &Path) -> Result<(), ParseError> {
-    let safe_name = ir.job_id.replace(['/', '\\', ':'], "_");
-    let path = output_dir.join(format!("job_{}.yaml", safe_name));
+    let path = unique_path(output_dir, &ir_stem(ir), "yaml");
     let yaml = serde_yaml::to_string(ir)?;
     std::fs::write(path, yaml)?;
     Ok(())
+}
+
+fn ir_stem(ir: &JobIr) -> String {
+    let folder = ir.source_folder.replace(['/', '\\', ':'], "_");
+    let job = ir.job_id.replace(['/', '\\', ':'], "_");
+    format!("job__{}__{}", folder, job)
+}
+
+/// Returns a path that does not yet exist, appending _2, _3, ... on collision.
+fn unique_path(dir: &Path, stem: &str, ext: &str) -> std::path::PathBuf {
+    let candidate = dir.join(format!("{}.{}", stem, ext));
+    if !candidate.exists() {
+        return candidate;
+    }
+    let mut n = 2u32;
+    loop {
+        let p = dir.join(format!("{}_{}.{}", stem, n, ext));
+        if !p.exists() {
+            return p;
+        }
+        n += 1;
+    }
 }
 
 pub fn write_summary(

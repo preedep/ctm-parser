@@ -247,10 +247,10 @@ Written once per run to the output directory root.
 
 ```
 output/
-├── job_CLEAR_CONDITION.json
-├── job_RT_JOB001.json
+├── job__FOLDER_NAME__JOBNAME.json
+├── job__FOLDER_NAME__RT_JOB001.json
 ├── ...
 └── migration_summary.json
 ```
 
-Job filename: `job_{JOBNAME}.{format}` where JOBNAME is taken verbatim from the XML (case-preserved). Slashes or path separators in JOBNAME are replaced with `_`.
+Job filename: `job__{FOLDER_NAME}__{JOBNAME}.{format}`. Both components are taken verbatim from the XML (case-preserved); `/`, `\`, `:` are replaced with `_`. The double-underscore separator ensures uniqueness across folders — the same JOBNAME can appear in multiple folders.

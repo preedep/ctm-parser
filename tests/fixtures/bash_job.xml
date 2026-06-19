@@ -1,0 +1,36 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<DEFTABLE>
+    <FOLDER DATACENTER="neutron" FOLDER_NAME="TEST_FOLDER" PLATFORM="UNIX" VERSION="919">
+        <JOB APPLICATION="TEST_APP"
+             APPL_TYPE="OS"
+             APR="1" AUG="1" DEC="1" FEB="1" JAN="1" JUL="1" JUN="1"
+             MAR="1" MAY="1" NOV="1" OCT="1" SEP="1"
+             CMDLINE="/batch/run.sh %%$ODATE %%YYYY %%MM"
+             CONFIRM="0"
+             CRITICAL="0"
+             CYCLIC="0"
+             DAYS="ALL"
+             DAYS_AND_OR="O"
+             JOBISN="1"
+             JOBNAME="RT_BASH_JOB_001"
+             MAXRERUN="2"
+             MAXWAIT="90"
+             NODEID="neutron"
+             PARENT_FOLDER="TEST_FOLDER"
+             PRIORITY="AA"
+             RETRO="0"
+             RUN_AS="ctmsrv"
+             SHIFT="Ignore Job"
+             SUB_APPLICATION="TEST_SUB"
+             TASKTYPE="Command"
+             TIMEFROM="0200"
+             USE_INSTREAM_JCL="N"
+             WEEKDAYS="ALL">
+            <INCOND AND_OR="A" NAME="RT_UPSTREAM_001-ENDED-OK" ODATE="ODAT"/>
+            <OUTCOND NAME="RT_BASH_JOB_001-ENDED-OK" ODATE="ODAT" SIGN="+"/>
+            <SHOUT WHEN="EXECTIME" TIME=">060" URGENCY="V" DEST="EM" MESSAGE="RT_BASH_JOB_001 execution greater than 60 minutes"/>
+            <ON CODE="*failed*" STMT="*"><DOACTION ACTION="NOTOK"/></ON>
+            <ON CODE="*success*" STMT="*"><DOACTION ACTION="OK"/></ON>
+        </JOB>
+    </FOLDER>
+</DEFTABLE>

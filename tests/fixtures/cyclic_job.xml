@@ -1,0 +1,26 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<DEFTABLE>
+    <FOLDER DATACENTER="neutron" FOLDER_NAME="MONITOR_FOLDER" PLATFORM="UNIX" VERSION="919">
+        <JOB APPLICATION="MONITOR"
+             APPL_TYPE="OS"
+             APR="1" AUG="1" DEC="1" FEB="1" JAN="1" JUL="1" JUN="1"
+             MAR="1" MAY="1" NOV="1" OCT="1" SEP="1"
+             CMDLINE="/batch/monitor/check_queue.sh"
+             CONFIRM="0"
+             CYCLIC="1"
+             CYCLIC_TOLERANCE="0"
+             CYCLIC_TYPE="C"
+             DAYS="ALL"
+             DAYS_AND_OR="O"
+             IND_CYCLIC="S"
+             INTERVAL="00015M"
+             JOBISN="1"
+             JOBNAME="RT_QUEUE_MONITOR"
+             NODEID="neutron"
+             PARENT_FOLDER="MONITOR_FOLDER"
+             TASKTYPE="Command"
+             WEEKDAYS="ALL">
+            <OUTCOND NAME="RT_QUEUE_MONITOR-ENDED-OK" ODATE="ODAT" SIGN="+"/>
+        </JOB>
+    </FOLDER>
+</DEFTABLE>

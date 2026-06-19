@@ -1,0 +1,23 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<DEFTABLE>
+    <FOLDER DATACENTER="neutron" FOLDER_NAME="SCHED_FOLDER" PLATFORM="UNIX" VERSION="919">
+        <JOB APPLICATION="SCHED_APP"
+             APPL_TYPE="OS"
+             APR="1" AUG="1" DEC="1" FEB="1" JAN="1" JUL="1" JUN="1"
+             MAR="1" MAY="1" NOV="1" OCT="1" SEP="1"
+             CMDLINE="/batch/run.sh"
+             CONFCAL="WORKDAYS_CAL"
+             CONFIRM="0"
+             CYCLIC="0"
+             DAYS="ALL"
+             DAYS_AND_OR="O"
+             JOBISN="1"
+             JOBNAME="RT_MANUAL_JOB_001"
+             NODEID="neutron"
+             PARENT_FOLDER="SCHED_FOLDER"
+             TASKTYPE="Command"
+             WEEKDAYS="ALL">
+            <OUTCOND NAME="RT_MANUAL_JOB_001-ENDED-OK" ODATE="ODAT" SIGN="+"/>
+        </JOB>
+    </FOLDER>
+</DEFTABLE>

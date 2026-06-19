@@ -1,0 +1,30 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<DEFTABLE>
+    <FOLDER DATACENTER="neutron" FOLDER_NAME="WATCHER_FOLDER" PLATFORM="UNIX" VERSION="919">
+        <JOB APPLICATION="EDW_BI"
+             APPL_FORM="File Watcher"
+             APPL_TYPE="FileWatch"
+             APR="1" AUG="1" DEC="1" FEB="1" JAN="1" JUL="1" JUN="1"
+             MAR="1" MAY="1" NOV="1" OCT="1" SEP="1"
+             JOBISN="1"
+             JOBNAME="BI_D_WATCHER_001"
+             NODEID="Glory"
+             PARENT_FOLDER="WATCHER_FOLDER"
+             RUN_AS="edwusr01"
+             TASKTYPE="Job"
+             TIMEFROM="1930"
+             DAYS="ALL"
+             DAYS_AND_OR="O"
+             WEEKDAYS="ALL">
+            <OUTCOND NAME="BI_D_WATCHER_001-ENDED-OK" ODATE="ODAT" SIGN="+"/>
+            <VARIABLE NAME="%%FileWatch-FILE_PATH" VALUE="/data/input/FILE_%%$ODATE.CTL"/>
+            <VARIABLE NAME="%%FileWatch-MIN_DET_SIZE" VALUE="0"/>
+            <VARIABLE NAME="%%FileWatch-INT_FILE_SEARCHES" VALUE="60"/>
+            <VARIABLE NAME="%%FileWatch-TIME_LIMIT" VALUE="5"/>
+            <VARIABLE NAME="%%FileWatch-START_TIME" VALUE="NOW"/>
+            <VARIABLE NAME="%%FileWatch-MODE" VALUE="CREATE"/>
+            <VARIABLE NAME="%%FileWatch-MIN_AGE" VALUE="NO_MIN_AGE"/>
+            <VARIABLE NAME="%%FileWatch-MAX_AGE" VALUE="NO_MAX_AGE"/>
+        </JOB>
+    </FOLDER>
+</DEFTABLE>

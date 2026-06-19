@@ -22,7 +22,7 @@ Control-M concept, attribute, and pattern maps to an Airflow equivalent.
 | Resource limit | `QUANTITATIVE NAME+QUANT` | Pool + slots | `pool="name"`, `pool_slots=N` |
 | Failure handler | `ON CODE=*failed*` / `SHOUT WHEN=NOTOK` | Failure callback | `on_failure_callback` |
 | Success handler | `ON CODE=*success*` | Success callback | `on_success_callback` |
-| SLA alert | `SHOUT WHEN=EXECTIME` | SLA miss callback | `sla=timedelta(seconds=N)` |
+| SLA alert | `SHOUT WHEN=EXECTIME` | Deadline alert (Airflow 3.1+) | `DAG(deadline=DeadlineAlert(...))` — task-level `sla` removed in Airflow 3.0 |
 | Named calendar | `DAYSCAL` / `CONFCAL` / `WEEKSCAL` | — | ManualReview (no equivalent) |
 | SLA checkpoint | `APPL_TYPE=BIM` | — | ManualReview (no equivalent) |
 | Manual gate | `CONFIRM=1` | — | ManualReview (no equivalent) |
@@ -304,10 +304,53 @@ The DAG generator reads these from `dag_config.plugin_config` in the IR.
 
 1. `ON CODE=*success*` block with `DOACTION ACTION=OK`
 
-### SLA (sla_miss_callback)
+### Deadline alerts (replaces SLA in Airflow 3.x)
 
-- `SHOUT WHEN=EXECTIME TIME=>NNN` → `sla=timedelta(seconds=NNN*60)`
-- Multiple SHOUT EXECTIME → use the smallest threshold as the SLA
+Airflow 3.0 removed `sla` and `sla_miss_callback` entirely. Airflow 3.1 introduced `DeadlineAlert` as the replacement (experimental). Deadline is set at **DAG level**, not task level.
+
+**Mapping:**
+
+| Control-M | Airflow 3.x |
+|---|---|
+| `SHOUT WHEN=EXECTIME TIME=>NNN` | `DeadlineAlert(reference=DeadlineReference.DAGRUN_LOGICAL_DATE, interval=timedelta(seconds=NNN*60), callback=...)` |
+| Multiple SHOUT EXECTIME | one `DeadlineAlert` per threshold (pass a list) |
+
+**Import:**
+```python
+from airflow.sdk import DAG, DeadlineAlert, DeadlineReference, AsyncCallback
+```
+
+**Example** — alert if DAG has not finished within 60 minutes of its scheduled time:
+```python
+from datetime import timedelta
+from airflow.sdk import DAG, DeadlineAlert, DeadlineReference, AsyncCallback
+from airflow.providers.slack.notifications.slack_webhook import SlackWebhookNotifier
+
+with DAG(
+    dag_id="PAYMENT_FOLDER",
+    schedule="0 2 * * *",
+    deadline=DeadlineAlert(
+        reference=DeadlineReference.DAGRUN_LOGICAL_DATE,
+        interval=timedelta(seconds=3600),
+        callback=AsyncCallback(
+            SlackWebhookNotifier,
+            kwargs={"text": "DAG {{ dag_run.dag_id }} missed deadline at {{ deadline.deadline_time }}"},
+        ),
+    ),
+) as dag:
+    ...
+```
+
+**DeadlineReference options:**
+
+| Reference | Use case |
+|---|---|
+| `DAGRUN_LOGICAL_DATE` | alert N minutes after scheduled execution time (closest to old task-level `sla`) |
+| `DAGRUN_QUEUED_AT` | alert if DAG stays queued too long before starting |
+| `FIXED_DATETIME(dt)` | alert if DAG has not finished by a specific wall-clock time |
+| `AVERAGE_RUNTIME(max_runs, min_runs)` | alert if DAG exceeds historical average runtime |
+
+**IR field:** `sla_sec` in `dag_config` stores the threshold in seconds (from `SHOUT WHEN=EXECTIME`). The DAG generator converts this to a `DeadlineAlert` on the DAG. When multiple `SHOUT WHEN=EXECTIME` exist, emit one `DeadlineAlert` per threshold as a list.
 
 ---
 
@@ -350,8 +393,9 @@ produces one `{FOLDER_NAME}.py` per manifest. Never read from `manual_review/`.
 
 ```python
 from datetime import datetime, timedelta
-from airflow import DAG
-from airflow.operators.bash import BashOperator
+from airflow.sdk import DAG, DeadlineAlert, DeadlineReference, AsyncCallback
+from airflow.providers.ssh.operators.ssh import SSHOperator
+from airflow.providers.microsoft.psrp.operators.psrp import PsrpOperator
 from airflow.operators.empty import EmptyOperator
 from airflow.sensors.external_task import ExternalTaskSensor
 from airflow.utils.trigger_rule import TriggerRule
@@ -362,6 +406,12 @@ with DAG(
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=["APP_NAME"],
+    # DeadlineAlert replaces sla/sla_miss_callback (removed in Airflow 3.0)
+    deadline=DeadlineAlert(
+        reference=DeadlineReference.DAGRUN_LOGICAL_DATE,
+        interval=timedelta(seconds=3600),   # from sla_sec in IR
+        callback=AsyncCallback(...),         # configure per deployment
+    ),
 ) as dag:
 
     # External sensors (cross-folder dependencies)
@@ -373,18 +423,21 @@ with DAG(
     )
 
     # Tasks
-    RT_PAY_001 = BashOperator(
+    # Linux agent → SSHOperator; Windows agent → PsrpOperator
+    RT_PAY_001 = SSHOperator(
         task_id="RT_PAY_001",
-        bash_command="/batch/pay_001.sh {{ ds_nodash }}",
+        ssh_conn_id="agent01",              # from nodeid in IR
+        command="/batch/pay_001.sh {{ ds_nodash }}",
         retries=2,
         execution_timeout=timedelta(seconds=3600),
         pool="batch_pool",
         pool_slots=1,
     )
 
-    RT_PAY_002 = BashOperator(
+    RT_PAY_002 = SSHOperator(
         task_id="RT_PAY_002",
-        bash_command="/batch/pay_002.sh {{ ds_nodash }}",
+        ssh_conn_id="agent01",
+        command="/batch/pay_002.sh {{ ds_nodash }}",
         retries=0,
         # trigger_rule=TriggerRule.ONE_SUCCESS  ← set when AND_OR=O
     )

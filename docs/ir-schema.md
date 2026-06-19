@@ -79,7 +79,7 @@ One file per job: `job_{JOBNAME}.json` (or `.yaml`).
 | `pool_slots` | int | QUANTITATIVE.QUANT | |
 | `owner` | string\|null | OWNER | |
 | `tags` | array | APPLICATION, SUB_APPLICATION, PARENT_FOLDER | |
-| `sla_sec` | int\|null | from SHOUT WHEN=EXECTIME, TIME field | |
+| `sla_sec` | int\|null | from SHOUT WHEN=EXECTIME, TIME field | DAG generator converts to `DeadlineAlert(interval=timedelta(seconds=N))` — Airflow 3.x (task-level `sla` was removed in 3.0) |
 | `nodeid` | string | NODEID | agent node name — maps to Airflow connection ID |
 | `run_as` | string\|null | RUN_AS | SSH/PSRP username — stored in connection, referenced here for audit |
 | `agent_os` | string | derived from connection registry by NODEID | `"linux"` → `SSHOperator`; `"windows"` → `PsrpOperator` |
@@ -189,7 +189,7 @@ Both `upstream` and `downstream` arrays are always present (empty array `[]` whe
     { "type": "shout", "dest": "EM", "urgency": "V", "message": "%%JOBNAME FAILED" }
   ],
   "on_success": [],
-  "sla_alerts": [
+  "deadline_alerts": [
     { "type": "shout", "dest": "EM", "urgency": "V", "message": "%%JOBNAME >60 min", "threshold_min": 60 }
   ]
 }

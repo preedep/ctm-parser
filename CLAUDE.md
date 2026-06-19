@@ -26,19 +26,26 @@ cargo check
 ```
 ctm-parser/
 ├── src/
-│   ├── main.rs              # CLI entry point (clap)
+│   ├── main.rs              # CLI entry point (clap), orchestration
+│   ├── lib.rs               # Exposes all modules for integration tests
 │   ├── reader/mod.rs        # Stage 2: XML tokenizer (quick-xml, SAX-style)
-│   ├── model/mod.rs         # Stage 3: ControlMJob / ControlMCondition / ControlMSchedule structs
+│   ├── model/mod.rs         # Stage 3: ControlMJob + child structs
 │   ├── classifier/mod.rs    # Stage 4: classify_job() → JobPattern enum
-│   ├── mapper/mod.rs        # Stage 5: attribute mapping → DagConfig
-│   ├── ir/mod.rs            # Stage 6: JobIR struct + serde_json / serde_yaml serialization
-│   └── error.rs             # Unified ParseError enum
+│   ├── mapper/mod.rs        # Stage 5: JobPattern + ControlMJob → DagConfig
+│   ├── ir/mod.rs            # Stage 6: DagConfig → JobIR → JSON/YAML per job
+│   ├── grouper/mod.rs       # Stage 7: JobIR[] → dag_groups / dag_singles manifests
+│   └── error.rs             # ParseError enum (thiserror)
 ├── tests/
-│   ├── fixtures/            # Sample Control-M XML snippets (one per job type)
-│   └── integration/         # End-to-end: XML → job_ir.json assertions
-└── docs/
-    ├── attribute-mapping.md # Control-M attr → Airflow field mapping table
-    └── patterns.md          # JobPattern enum decision rules
+│   ├── fixtures/            # One XML snippet per JobPattern (bash, cyclic, filewatcher, manual_review)
+│   └── parse_test.rs        # Integration tests: XML → IR assertions (pattern + unmapped_attrs)
+├── docs/
+│   ├── ctm-to-airflow-mapping.md  # Primary DAG generator reference (START HERE)
+│   ├── attribute-mapping.md       # Control-M attr → Airflow field mapping table
+│   ├── patterns.md                # JobPattern decision tree + ManualReview trigger list
+│   ├── ir-schema.md               # JobIR JSON schema with plugin_config shapes
+│   ├── xml-examples.md            # Real XML snippets for every job type
+│   └── schema-reference.md        # XSD type breakdown + dataset statistics
+└── run.sh                   # Run against dataset/export_xml_260612.xml → output/
 ```
 
 ## Tech stack
@@ -61,6 +68,7 @@ ctm-parser/
 | 4 | `classifier/` | `classify_job()` → `JobPattern` enum |
 | 5 | `mapper/` | `JobPattern` + `ControlMJob` → `DagConfig` |
 | 6 | `ir/` | `DagConfig` → `JobIR` → JSON/YAML file per job |
+| 7 | `grouper/` | `JobIR[]` → dag_groups / dag_groups_external / dag_singles manifests |
 
 ## Core types
 
@@ -68,11 +76,11 @@ ctm-parser/
 // model/mod.rs — all unknown attributes MUST go into `extra`, never dropped
 pub struct ControlMJob {
     pub jobname: String,
-    pub application: Option<String>,
-    pub sub_application: Option<String>,
+    pub parent_folder: String,
+    pub tasktype: String,
+    pub appl_type: String,
     pub cmdline: Option<String>,
-    pub maxwait: Option<u32>,
-    pub cyclic: Option<CyclicConfig>,
+    pub cyclic: bool,
     pub incond: Vec<InCondition>,
     pub outcond: Vec<OutCondition>,
     pub shout: Vec<ShoutConfig>,
@@ -94,13 +102,10 @@ pub enum JobPattern {
     ManualReview { reason: String },               // BIM, named calendars, CONFIRM, etc.
 }
 
-// error.rs
-pub enum ParseError {
-    Xml { offset: u64, source: quick_xml::Error },
-    MissingAttr { attr: &'static str, job: String },
-    UnknownJobType { job_type: String }, // routes to ManualReview — not a hard failure
-    Io(#[from] std::io::Error),
-}
+// grouper/mod.rs — DAG grouping: 1 FOLDER = 1 DAG (authoritative rule)
+// Three-pass resolution: OUTCOND index → cross-folder producers → per-folder split
+// Output: dag_groups/ (self-contained), dag_groups_external/ (needs ExternalTaskSensor),
+//         dag_singles/ (isolated jobs, no edges, no sensors)
 ```
 
 ## Real dataset profile (export_xml_260612.xml)
@@ -124,145 +129,31 @@ pub enum ParseError {
 | Jobs with ON blocks | 25,183 (83.1%) |
 | Jobs with QUANTITATIVE | 2,276 (7.5%) |
 
-## Attribute mapping (Stage 5)
+## Mapping and output rules
 
-| Control-M attribute | Airflow / DAG config field | Notes |
-|---|---|---|
-| `CMDLINE` | `BashOperator.bash_command` | `%%VAR%%` → `{{ var.value.VAR }}`, `%%$ODATE` → `{{ ds_nodash }}` |
-| `MAXWAIT` | `execution_timeout_sec` | minutes × 60; 0 = no timeout |
-| `MAXRERUN` | `retries` | copy as int |
-| `RETRO=1` | `catchup=True` | |
-| `INCOND ODATE=ODAT` | intra/cross-folder dependency | edge `>>` (same folder) or `ExternalTaskSensor` (cross-folder) |
-| `INCOND ODATE=PREV` | `ExternalTaskSensor` | `execution_delta=timedelta(days=1)` — auto-converted |
-| `INCOND ODATE=NEXT` | ManualReview | forward dependency, no Airflow equivalent — 31 cases |
-| `INCOND ODATE=STAT` | ManualReview | persistent manual flag, no Airflow equivalent — 14 cases |
-| `INCOND ODATE=****` | ManualReview | wildcard date, no Airflow equivalent — 6 cases |
-| `INCOND AND_OR=O` | `TriggerRule.ONE_SUCCESS` | native Airflow OR logic — 331 cases; record `trigger_rule` in IR |
-| `OUTCOND SIGN="+"` | dependency graph edge | recorded in IR `dependencies.downstream` |
-| `OUTCOND ODATE=STAT` | note in IR only | job still auto-converts; emit `outcond_static: true` — 18 cases |
-| `CYCLIC=1` + `INTERVAL` | `schedule=timedelta(seconds=N)` | `00015M` → 900 sec |
-| `DAYS`/`WEEKDAYS`/months | cron expression | `DAYSCAL`/`CONFCAL` present → `ManualReview` |
-| `QUANTITATIVE.NAME` | `pool` | normalize to `snake_case` |
-| `SHOUT WHEN=EXECTIME` | `sla_sec` | `TIME=>060` → 3600 sec |
-| `SHOUT WHEN=NOTOK` | `on_failure_callback` | |
-| `ON CODE=*failed*` | `on_failure_callback` | |
-| `ON CODE=*success*` | `on_success_callback` | |
-| `%%FileWatch-FILE_PATH` | `FileSensor.filepath` | |
-| `%%FTP-CONNTYPE2` | `FTPOperator`/`SFTPOperator` | |
-| `%%AWS-SERVICE_TYPE=STEP` | `StepFunctionStartExecutionOperator` | |
-| `%%UCM-DAGID` | `TriggerDagRunOperator.trigger_dag_id` | AIRFLOWV2 jobs |
+Full detail lives in `docs/ctm-to-airflow-mapping.md`. Key invariants to keep in mind when modifying code:
 
-## Condition patterns (from real dataset — 32,994 INCOND / 30,467 OUTCOND)
+- **1 FOLDER = 1 DAG** — never split a folder by connected components
+- `unmapped_attrs` must always be emitted (even as `[]`) — never suppressed
+- Exit code 0 when jobs route to `ManualReview`; exit code 1 only on fatal IO/XML errors
+- `INCOND ODATE=PREV` → `execution_delta_days=1` in IR; `NEXT/STAT/****` → ManualReview
+- `INCOND AND_OR=O` → `trigger_rule="ONE_SUCCESS"` in IR
+- `OUTCOND ODATE=STAT` → `outcond_static=true` in IR (job still auto-converts)
+- `OUTCOND SIGN="-"` → ManualReview: `outcond_delete`
+- Condition suffix pattern: `{JOBNAME}-ENDED-OK` (32,378 cases); suffix never modified by parser
 
-### INCOND ODATE values
-
-| Value | Count | Airflow mapping | Auto-convert? |
-|---|---|---|---|
-| `ODAT` | 32,747 | same-day `>>` edge or `ExternalTaskSensor` | yes |
-| `PREV` | 196 | `ExternalTaskSensor(execution_delta=timedelta(days=1))` | yes |
-| `NEXT` | 31 | forward dependency — no clean mapping | ManualReview |
-| `STAT` | 14 | persistent manual flag — no Airflow equivalent | ManualReview |
-| `****` | 6 | wildcard date — no Airflow equivalent | ManualReview |
-
-### INCOND AND_OR values
-
-| Value | Count | Airflow mapping |
-|---|---|---|
-| `A` | 32,663 | default `TriggerRule.ALL_SUCCESS` (implicit) |
-| `O` | 331 | `TriggerRule.ONE_SUCCESS` on the downstream task — record `trigger_rule` in IR |
-
-### OUTCOND SIGN values
-
-| Value | Count | Handling |
-|---|---|---|
-| `+` | 30,441 | normal condition add — dependency graph edge |
-| `-` | 26 | delete condition — ManualReview: `outcond_delete` |
-
-### OUTCOND ODATE values
-
-| Value | Count | Handling |
-|---|---|---|
-| `ODAT` | 30,449 | normal |
-| `STAT` | 18 | persistent flag — job still auto-converts; emit `outcond_static: true` in IR |
-
-### Condition NAME suffix patterns
-
-All names follow `{JOBNAME}-{SUFFIX}`. Common suffixes: `-ENDED-OK` (32,378), `-ENDED` (104), `-END-OK` (37 — typo variant), `-M2F` (8 — manual-to-force), `-ALERT-*-ENDED-OK` (alert jobs).
-
-## DAG grouping model
-
-**1 FOLDER = 1 DAG.** This is the authoritative mapping decision.
-
-| Control-M concept | Airflow concept |
-|---|---|
-| `FOLDER` | DAG |
-| `JOB` | Task (one operator per job) |
-| `INCOND`/`OUTCOND` within same folder | Task dependency (`>>`) |
-| `INCOND`/`OUTCOND` referencing another folder | `ExternalTaskSensor` task |
-| Jobs in same folder with no condition links | Independent parallel tasks (no edges) |
-
-**Rationale:** Folders are an intentional administrative grouping — same schedule window, same datacenter, same owning team. Even unrelated jobs in the same folder belong in the same DAG operationally. Connected-component splitting would create DAGs that don't map to anything the ops team recognizes, making validation harder.
-
-**Downstream DAG generator must:**
-1. Group IR files by `source_folder`
-2. Build task list from all jobs in folder
-3. Resolve intra-folder conditions → `>>` edges (match `downstream[].condition_name` to `upstream[].condition_name` within the same folder)
-4. Resolve cross-folder conditions → `ExternalTaskSensor` tasks (condition name found in a different folder's jobs)
-5. Emit one `.py` DAG file per folder
-
-## Output behavior
+### Output directories
 
 ```
 output/
-├── jobs/                    one IR file per job: job_{JOBNAME}.json (or .yaml)
-├── dag_groups/              self-contained DAGs: intra-folder edges only
-├── dag_groups_external/     DAGs with ExternalTaskSensor cross-folder dependencies
-├── dag_singles/             single-task DAGs: isolated jobs with no dependencies
+├── jobs/                    job_{JOBNAME}.json — one IR file per job
+├── dag_groups/              folder DAGs with intra-folder edges only
+├── dag_groups_external/     folder DAGs requiring ExternalTaskSensor
+├── dag_singles/             isolated jobs: no edges, no sensors
 └── migration_summary.json
 ```
 
-- `jobs/` — raw job IR; consumed by anything that needs per-job detail
-- `dag_groups/` — fully self-contained; DAG generator only needs this folder's jobs
-- `dag_groups_external/` — requires cross-DAG wiring; more complex to generate
-- `dag_singles/` — simplest case; one task, no edges, no sensors
-- `unmapped_attrs` field must always be emitted (even as `[]`) — never suppressed
-- Exit code 0 when jobs route to `ManualReview`; exit code 1 only on fatal IO/XML errors
-
-### Isolation rule (grouper stage)
-
-A job is isolated (→ `dag_singles/`) if it appears in **neither** side of any edge AND is not referenced by any external sensor within its folder's resolved graph. Connected jobs (→ `dag_groups/`) are any job touched by at least one edge or sensor.
-
-### dag_groups manifest shape
-
-```json
-{
-  "dag_id": "FOLDER_NAME",
-  "datacenter": "neutron",
-  "schedule": "0 2 * * *",
-  "timezone": null,
-  "jobs": [{ "job_id": "...", "pattern": "BashJob", "operator": "BashOperator" }],
-  "edges": [{ "from": "JOB_A", "to": "JOB_B", "condition": "JOB_A-ENDED-OK" }],
-  "external_sensors": [
-    { "in_job": "JOB_C", "condition": "OTHER-ENDED-OK", "source_folder": "OTHER_FOLDER", "source_job": "JOB_X" },
-    { "in_job": "JOB_D", "condition": "ORPHAN-ENDED-OK", "source_folder": null, "source_job": null }
-  ]
-}
-```
-
-### dag_singles manifest shape
-
-```json
-{
-  "dag_id": "JOB_NAME",
-  "source_folder": "FOLDER_NAME",
-  "datacenter": "neutron",
-  "schedule": "0 2 * * *",
-  "timezone": null,
-  "job": { "job_id": "JOB_NAME", "pattern": "BashJob", "operator": "BashOperator" }
-}
-```
-
-`source_folder: null` on an external sensor means the upstream condition was not found in any folder — producing job is ManualReview, outside the export scope, or from a legacy system.
+A job is isolated (→ `dag_singles/`) if it has no intra-folder edges, is not referenced by any external sensor, and is not a cross-folder producer (its OUTCOND consumed by a job in a different folder).
 
 ## Reference documents
 

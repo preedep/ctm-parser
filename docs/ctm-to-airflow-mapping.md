@@ -209,7 +209,10 @@ DAYS=ALL + WEEKDAYS=1,2,3    →  schedule="<minute> <hour> * * 1,2,3"
 DAYS=1,15 + WEEKDAYS=1 + DAYS_AND_OR=A  →  schedule="<minute> <hour> 1,15 * 1"
 TIMEFROM=0200                →  hour=2, minute=0
 TIMEFROM absent              →  hour=0, minute=0
+No CYCLIC, no DAYS/TIMEFROM  →  schedule=null  (manual order — trigger-only)
 ```
+
+> **`schedule=null` — manual order DAGs:** When a folder has no `CYCLIC` jobs and no `DAYS`/`TIMEFROM`/`WEEKDAYS` attributes, the parser emits `schedule: null`. This means the job was triggered on demand by a Control-M operator (manual order), not by a time schedule. In Airflow, the generated DAG will have `schedule=None` — it never runs automatically and must be triggered manually or by an external system. The migration engineer should document what triggers the DAG in production.
 
 > **When is a sensor used vs a schedule?**
 > - `schedule=timedelta(...)` — the DAG recurs automatically; no sensor involved. Used for `CyclicJob`.

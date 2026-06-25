@@ -8,6 +8,20 @@ Rust CLI tool that parses Control-M EM XML exports and converts them to an inter
 
 Migration scale: ~2,000+ Control-M jobs → Airflow DAGs within 17 months.
 
+## Prerequisites
+
+| Tool | Version | Purpose |
+|---|---|---|
+| Rust | stable (2021 edition) | Build the parser |
+| Python | 3.10–3.14 | DAG verification in `.venv` |
+
+**Python venv setup** (one-time, after cloning):
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+`generate_dags.sh` auto-creates the venv if absent — manual setup is only needed when running verification outside the script (e.g. `pyflakes` in CI).
+
 ## Commands
 
 ```bash

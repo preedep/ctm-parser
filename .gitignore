@@ -27,3 +27,6 @@ target
 /dataset
 /output
 .venv/
+
+copy2remote.sh
+remote.sh

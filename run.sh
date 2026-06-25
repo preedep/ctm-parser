@@ -46,6 +46,7 @@ run_one() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     rm -rf "$OUT_DIR"
     mkdir -p "$OUT_DIR"
+    STEM=$(basename "$INPUT" .xml)
     "${SCRIPT_DIR}/target/release/ctm-parser" \
         --input         "$INPUT" \
         --output        "$OUT_DIR" \
@@ -54,6 +55,7 @@ run_one() {
         --company       "$COMPANY" \
         --env           "$ENV" \
         --templates-dir "${SCRIPT_DIR}/templates" \
+        --config-dir    "${SCRIPT_DIR}/config/${STEM}" \
         --generate-dags
 
     echo ""

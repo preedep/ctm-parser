@@ -54,7 +54,12 @@ struct Args {
     #[arg(long, default_value = "templates")]
     templates_dir: PathBuf,
 
-    /// Dump IR-derived substitution defaults to config/<env>/<job_id>.json for manual editing
+    /// Config override directory for this input scenario (default: ./config/<input_stem>)
+    /// Override files are read from <config_dir>/<env>/<job_id>.json
+    #[arg(long)]
+    config_dir: Option<PathBuf>,
+
+    /// Dump IR-derived substitution defaults to <config_dir>/<env>/<job_id>.json for manual editing
     #[arg(long, default_value_t = false)]
     dump_config: bool,
 }
@@ -186,14 +191,25 @@ fn main() -> Result<()> {
         .with_context(|| "failed to write migration_summary.json")?;
 
     // Stage 3 — optional DAG code generation from templates
+    // Config dir defaults to ./config/<input_stem> so each scenario has its own override folder
+    let input_stem = args
+        .input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("default");
+    let config_dir = args
+        .config_dir
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from("config").join(input_stem));
+
     if args.dump_config {
-        let configs_written = dump_config(&irs, &args.output, &args.company, &args.env)
+        let configs_written = dump_config(&irs, &config_dir, &args.company, &args.env)
             .with_context(|| "config dump failed")?;
-        info!(configs_written = configs_written, "config files dumped to output/config/{}/", args.env);
+        info!(configs_written = configs_written, config_dir = %config_dir.display(), "config files dumped");
     }
 
     if args.generate_dags {
-        let dags_written = generate_dags(&irs, &args.output, &args.templates_dir, &args.company, &args.env)
+        let dags_written = generate_dags(&irs, &args.output, &args.templates_dir, &config_dir, &args.company, &args.env)
             .with_context(|| "DAG code generation failed")?;
         info!(dags_written = dags_written, "DAG code generation complete");
     }

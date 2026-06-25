@@ -10,9 +10,8 @@
 #   ./generate_dags.sh dataset/nonprod/source_move.xml output/test mycompany dev info --dump-config
 #
 # Config overrides (optional):
-#   After running with --dump-config, edit the generated config files:
-#     <output_dir>/config/<env>/<job_id>.json
-#   Then re-run without --dump-config to apply your overrides.
+#   Config files live at: config/<scenario>/<env>/<job_id>.json  (committed to git)
+#   After running with --dump-config, edit the generated files and re-run to apply them.
 #   Only keys present in the config file override IR-derived defaults.
 
 set -euo pipefail
@@ -32,7 +31,7 @@ if [ -z "$INPUT" ]; then
     echo "  company       — company prefix in DAG ID (default: mycompany)"
     echo "  env           — deployment environment: dev|sit|uat|prod (default: dev)"
     echo "  log_level     — debug|info|warn|error (default: info)"
-    echo "  --dump-config — write default config JSONs to config/<env>/ for manual editing"
+    echo "  --dump-config — write default config JSONs to config/<stem>/<env>/ for editing"
     exit 1
 fi
 
@@ -43,6 +42,7 @@ ENV="${4:-dev}"
 LOG_LEVEL="${5:-info}"
 DUMP_CONFIG="${6:-}"
 TEMPLATES_DIR="${SCRIPT_DIR}/templates"
+CONFIG_DIR="${SCRIPT_DIR}/config/${STEM}"
 BINARY="${SCRIPT_DIR}/target/release/ctm-parser"
 
 # ── ensure venv exists and packages are installed ────────────────────────────
@@ -70,13 +70,13 @@ echo "  Output    : $OUTPUT"
 echo "  Company   : $COMPANY"
 echo "  Env       : $ENV"
 echo "  Templates : $TEMPLATES_DIR"
+echo "  Config    : $CONFIG_DIR"
 echo "  Python    : $("$PYTHON" --version 2>&1)"
 if [ -n "$DUMP_CONFIG" ]; then
     echo "  Mode      : parse + dump config + generate DAGs"
 else
-    CONFIG_DIR="$OUTPUT/config/$ENV"
-    if [ -d "$CONFIG_DIR" ] && [ "$(ls "$CONFIG_DIR" 2>/dev/null | wc -l | tr -d ' ')" -gt 0 ]; then
-        echo "  Mode      : parse + generate DAGs  [config overrides from $CONFIG_DIR]"
+    if [ -d "${CONFIG_DIR}/${ENV}" ] && [ "$(ls "${CONFIG_DIR}/${ENV}" 2>/dev/null | wc -l | tr -d ' ')" -gt 0 ]; then
+        echo "  Mode      : parse + generate DAGs  [config overrides from ${CONFIG_DIR}/${ENV}/]"
     else
         echo "  Mode      : parse + generate DAGs  [no config overrides]"
     fi
@@ -84,20 +84,8 @@ fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# ── preserve config/ across output wipe ──────────────────────────────────────
-CONFIG_BACKUP=""
-if [ -d "$OUTPUT/config" ]; then
-    CONFIG_BACKUP=$(mktemp -d)
-    cp -r "$OUTPUT/config" "$CONFIG_BACKUP/"
-fi
-
 rm -rf "$OUTPUT"
 mkdir -p "$OUTPUT"
-
-if [ -n "$CONFIG_BACKUP" ]; then
-    cp -r "$CONFIG_BACKUP/config" "$OUTPUT/"
-    rm -rf "$CONFIG_BACKUP"
-fi
 
 # ── generate ──────────────────────────────────────────────────────────────────
 EXTRA_FLAGS=""
@@ -111,6 +99,7 @@ EXTRA_FLAGS=""
     --company       "$COMPANY" \
     --env           "$ENV" \
     --templates-dir "$TEMPLATES_DIR" \
+    --config-dir    "$CONFIG_DIR" \
     --generate-dags \
     $EXTRA_FLAGS
 
@@ -186,17 +175,21 @@ if [ "$DAG_COUNT" -gt 0 ]; then
     echo ""
 fi
 
-CONFIG_COUNT=$(ls "${OUTPUT}/config/${ENV}/" 2>/dev/null | wc -l | tr -d ' ')
+CONFIG_COUNT=$(ls "${CONFIG_DIR}/${ENV}/" 2>/dev/null | wc -l | tr -d ' ')
 if [ "$CONFIG_COUNT" -gt 0 ]; then
-    echo "  Config override files (${OUTPUT}/config/${ENV}/):"
-    ls "${OUTPUT}/config/${ENV}/" | sed 's/^/    /'
+    echo "  Config overrides applied from: ${CONFIG_DIR}/${ENV}/"
+    ls "${CONFIG_DIR}/${ENV}/" | sed 's/^/    /'
     echo ""
-    echo "  Edit any config file, then re-run without --dump-config to apply overrides."
+fi
+
+if [ -n "$DUMP_CONFIG" ]; then
+    echo "  Config defaults dumped to: ${CONFIG_DIR}/${ENV}/"
+    echo "  Edit these files, then re-run without --dump-config to apply overrides."
+    echo ""
 fi
 
 # Exit non-zero if any DAG failed verification
 if [ "$VERIFY_FAIL" -gt 0 ]; then
-    echo ""
     echo "  ERROR: $VERIFY_FAIL DAG file(s) failed verification — fix before deploying"
     exit 1
 fi

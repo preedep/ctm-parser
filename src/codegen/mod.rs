@@ -7,7 +7,7 @@ use crate::ir::{CodegenMeta, JobIr};
 /// Entry point: generate DAG .py files for all eligible IR entries.
 ///
 /// For each eligible job, looks for an optional override config at:
-///   `<output_dir>/config/<env>/<job_id>.json`
+///   `<config_dir>/<env>/<job_id>.json`
 /// If found, its key→value pairs override the IR-derived substitution defaults.
 /// Only keys present in the config are overridden; everything else falls back to IR values.
 ///
@@ -16,6 +16,7 @@ pub fn generate_dags(
     irs: &[JobIr],
     output_dir: &Path,
     templates_dir: &Path,
+    config_dir: &Path,
     company: &str,
     env: &str,
 ) -> Result<usize, ParseError> {
@@ -45,8 +46,7 @@ pub fn generate_dags(
         };
 
         // Merge optional override config — config keys win over IR-derived defaults
-        let config_path = output_dir
-            .join("config")
+        let config_path = config_dir
             .join(env)
             .join(format!("{}.json", ir.job_id));
         let config_used = merge_config_overrides(&mut subs, &config_path, &ir.job_id);
@@ -114,14 +114,14 @@ pub fn generate_dags(
 }
 
 /// Dump IR-derived substitution defaults to a config JSON file for manual editing.
-/// Engineers can then drop this file into `config/<env>/` to override specific values.
+/// Engineers can then edit this file and place it in `config/<scenario>/<env>/` to override specific values.
 pub fn dump_config(
     irs: &[JobIr],
-    output_dir: &Path,
+    config_dir: &Path,
     company: &str,
     env: &str,
 ) -> Result<usize, ParseError> {
-    let config_dir = output_dir.join("config").join(env);
+    let config_dir = config_dir.join(env);
     std::fs::create_dir_all(&config_dir).map_err(|e| ParseError::CodegenIo {
         path: config_dir.display().to_string(),
         source: e,

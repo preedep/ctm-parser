@@ -22,7 +22,7 @@ target
 .claude
 
 # Added by cargo
-
+/config
 /target
 /dataset
 /output

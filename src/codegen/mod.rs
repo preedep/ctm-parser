@@ -60,7 +60,7 @@ pub fn generate_dags(
             Err(e) => return Err(e),
         };
 
-        let dag_id = build_dag_id(company, ir, env);
+        let dag_id = build_dag_id(&subs);
         let dag_filename = format!("{}.py", dag_id);
         let out_path = dags_dir.join(&dag_filename);
 
@@ -357,27 +357,18 @@ fn render_template(template_path: &Path, subs: &HashMap<String, String>) -> Resu
     Ok(content)
 }
 
-fn build_dag_id(company: &str, ir: &JobIr, env: &str) -> String {
-    let dc = ir.dag_config.as_ref();
-    let application = dc
-        .and_then(|d| d.application.as_deref())
-        .unwrap_or("")
-        .to_lowercase()
-        .replace(' ', "_");
-    let sub_application = dc
-        .and_then(|d| d.sub_application.as_deref())
-        .unwrap_or("")
-        .to_lowercase()
-        .replace(' ', "_");
-    let folder = ir.source_folder.to_lowercase().replace(' ', "_");
-
+/// Build DAG ID from the merged substitution map so config overrides affect the filename.
+fn build_dag_id(subs: &HashMap<String, String>) -> String {
+    let get = |key: &str| {
+        subs.get(key).map(|s| s.to_lowercase().replace(' ', "_")).unwrap_or_default()
+    };
     format!(
         "{}-{}-{}-{}-{}",
-        company.to_lowercase(),
-        application,
-        sub_application,
-        folder,
-        env.to_lowercase(),
+        get("##COMPANY##"),
+        get("##PROJECT##"),
+        get("##APP_CODE##"),
+        get("##DAG_NAME##"),
+        get("##ENV##"),
     )
 }
 

@@ -1,4 +1,5 @@
 pub mod classifier;
+pub mod codegen;
 pub mod error;
 pub mod grouper;
 pub mod ir;

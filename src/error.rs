@@ -22,4 +22,14 @@ pub enum ParseError {
 
     #[error("YAML serialization error: {0}")]
     Yaml(#[from] serde_yaml::Error),
+
+    #[error("template not found: {0}")]
+    TemplateNotFound(String),
+
+    #[error("codegen IO error writing {path}: {source}")]
+    CodegenIo {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
 }

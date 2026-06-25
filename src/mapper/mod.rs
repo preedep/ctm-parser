@@ -6,7 +6,7 @@ use crate::classifier::{AwsServiceType, FileWatchMode, JobPattern, TransferProto
 use crate::model::{ControlMJob, OnAction, ShoutConfig};
 use crate::node_registry::NodeRegistry;
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DagConfig {
     pub schedule: Option<String>,
     /// Raw TIMEFROM value (HHMM) from Control-M — retained so the DAG generator can split

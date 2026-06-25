@@ -1,0 +1,219 @@
+use std::collections::HashMap;
+use std::path::Path;
+
+use crate::error::ParseError;
+use crate::ir::JobIr;
+
+/// Entry point: generate DAG .py files for all eligible IR entries.
+/// Returns the number of DAG files successfully written.
+pub fn generate_dags(
+    irs: &[JobIr],
+    output_dir: &Path,
+    templates_dir: &Path,
+    company: &str,
+    env: &str,
+) -> Result<usize, ParseError> {
+    let dags_dir = output_dir.join("auto_converted").join("dags");
+    std::fs::create_dir_all(&dags_dir).map_err(|e| ParseError::CodegenIo {
+        path: dags_dir.display().to_string(),
+        source: e,
+    })?;
+
+    let mut count = 0usize;
+
+    for ir in irs {
+        let Some(tpl_rel) = select_template(ir) else {
+            tracing::debug!(
+                job = %ir.job_id,
+                pattern = %ir.pattern,
+                "codegen: skipped (no template for this pattern/os/transfer_type)"
+            );
+            continue;
+        };
+
+        let tpl_path = templates_dir.join(tpl_rel);
+
+        let Some(subs) = build_substitutions(ir, company, env) else {
+            tracing::warn!(job = %ir.job_id, "codegen: skipped (missing required IR fields)");
+            continue;
+        };
+
+        let rendered = match render_template(&tpl_path, &subs) {
+            Ok(r) => r,
+            Err(ParseError::TemplateNotFound(ref p)) => {
+                tracing::warn!(job = %ir.job_id, path = %p, "codegen: template file not found — skipped");
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+
+        let dag_id = build_dag_id(company, ir, env);
+        let out_path = dags_dir.join(format!("{}.py", dag_id));
+
+        std::fs::write(&out_path, rendered).map_err(|e| ParseError::CodegenIo {
+            path: out_path.display().to_string(),
+            source: e,
+        })?;
+
+        tracing::debug!(job = %ir.job_id, dag_id = %dag_id, "codegen: DAG written");
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+/// Returns the template relative path (from templates_dir) for this IR, or None to skip.
+/// Only single-job (no upstream INCOND) FileTransfer onprem_to_onprem linux jobs are supported.
+fn select_template(ir: &JobIr) -> Option<&'static str> {
+    if ir.pattern != "FileTransfer" {
+        return None;
+    }
+    // Skip jobs with upstream dependencies — template is single-DAG only (no ExternalTaskSensor)
+    if !ir.dependencies.upstream.is_empty() {
+        return None;
+    }
+    let dc = ir.dag_config.as_ref()?;
+    if dc.agent_os != "linux" {
+        return None;
+    }
+    let pc = dc.plugin_config.as_ref()?;
+    let transfer_type = pc.get("transfer_type")?.as_str()?;
+    if transfer_type != "onprem_to_onprem" {
+        return None;
+    }
+    Some("file-transfer-onprem-onprem-unix/dags/project_file_transfer_onprem_onprem_unix.py")
+}
+
+/// Build the ##KEY## → value substitution map from a JobIr.
+/// Returns None if any required field is missing.
+fn build_substitutions(ir: &JobIr, company: &str, env: &str) -> Option<HashMap<String, String>> {
+    let dc = ir.dag_config.as_ref()?;
+    let pc = dc.plugin_config.as_ref()?;
+
+    let application    = dc.application.as_deref().unwrap_or("").to_lowercase();
+    let sub_application = dc.sub_application.as_deref().unwrap_or("").to_lowercase();
+    let folder_lower   = ir.source_folder.to_lowercase();
+    let env_lower      = env.to_lowercase();
+    let nodeid         = dc.nodeid.to_lowercase();
+
+    let transfers = pc.get("transfers")?.as_array()?;
+    let tr = transfers.first()?;
+
+    let direction  = tr.get("direction")?.as_str()?.to_lowercase();
+    let local_path = tr.get("local_path").and_then(|v| v.as_str()).unwrap_or("");
+    let remote_path = tr.get("remote_path").and_then(|v| v.as_str()).unwrap_or("");
+
+    let (source_path, dest_path) = if direction.starts_with("download") {
+        (remote_path, local_path)
+    } else {
+        (local_path, remote_path)
+    };
+
+    let protocol_raw = pc.get("protocol").and_then(|v| v.as_str()).unwrap_or("ftp");
+    let protocol = normalize_protocol(protocol_raw);
+
+    let dest_host  = pc.get("remote_host").and_then(|v| v.as_str()).unwrap_or("");
+    let dest_user  = pc.get("account").and_then(|v| v.as_str()).unwrap_or("");
+    let dest_port  = default_port(&protocol);
+
+    let pre_command  = tr.get("pre_command").and_then(|v| v.as_str()).unwrap_or("");
+    let post_command = tr.get("post_command").and_then(|v| v.as_str()).unwrap_or("");
+
+    let schedule = dc.schedule.as_deref().unwrap_or("@daily");
+
+    let tags_literal = format!(
+        "[\"{}\", \"{}\", \"{}\", \"{}\", \"file-transfer\"]",
+        application, sub_application, folder_lower, env_lower
+    );
+
+    let password_var = format!(
+        "FTP_{}_PASS",
+        dest_user.to_uppercase().replace('-', "_").replace(' ', "_")
+    );
+
+    let mut subs = HashMap::new();
+    subs.insert("##COMPANY##".into(),   company.to_lowercase());
+    subs.insert("##PROJECT##".into(),   application.clone());
+    subs.insert("##APP_CODE##".into(),  sub_application.clone());
+    subs.insert("##ENV##".into(),       env_lower.clone());
+    subs.insert("##DAG_NAME##".into(),  folder_lower.clone());
+    subs.insert("##ACTIVE##".into(),    "True".into());
+    subs.insert("##SCHEDULE##".into(),  schedule.into());
+    subs.insert("##TAGS##".into(),      tags_literal);
+    subs.insert("##EMAIL_LIST##".into(),                         "[]".into());
+    subs.insert("##ENABLE_EMAIL_NOTIFICATION_SUCCESS##".into(),  "False".into());
+    subs.insert("##ENABLE_EMAIL_NOTIFICATION_FAIL##".into(),     "True".into());
+    subs.insert("##SSH_CONN_ID##".into(),  format!("ssh_{}_{}", nodeid, env_lower));
+    subs.insert("##REMOTE_HOST##".into(),  dc.nodeid.clone());
+    subs.insert("##PROTOCOL##".into(),     protocol.clone());
+    subs.insert("##DIRECTION##".into(),    direction);
+    subs.insert("##SOURCE_PATH##".into(),  source_path.into());
+    subs.insert("##DEST_HOST##".into(),    dest_host.into());
+    subs.insert("##DEST_PORT##".into(),    dest_port.into());
+    subs.insert("##DEST_USER##".into(),    dest_user.into());
+    subs.insert("##DEST_PATH##".into(),    dest_path.into());
+    subs.insert("##PASSWORD_VAR##".into(), password_var);
+    subs.insert("##NEW_NAME##".into(),       "".into());
+    subs.insert("##ARCHIVE_PATH##".into(),   "".into());
+    subs.insert("##RETENTION_DAYS##".into(), "30".into());
+    subs.insert("##PRE_COMMAND##".into(),    pre_command.into());
+    subs.insert("##PRE_COMMAND_ARGS##".into(),  "".into());
+    subs.insert("##POST_COMMAND##".into(),   post_command.into());
+    subs.insert("##POST_COMMAND_ARGS##".into(), "".into());
+
+    Some(subs)
+}
+
+/// Read template, apply all ##KEY## substitutions, return rendered string.
+fn render_template(template_path: &Path, subs: &HashMap<String, String>) -> Result<String, ParseError> {
+    if !template_path.exists() {
+        return Err(ParseError::TemplateNotFound(template_path.display().to_string()));
+    }
+    let mut content = std::fs::read_to_string(template_path).map_err(|e| ParseError::CodegenIo {
+        path: template_path.display().to_string(),
+        source: e,
+    })?;
+    for (placeholder, value) in subs {
+        content = content.replace(placeholder.as_str(), value.as_str());
+    }
+    Ok(content)
+}
+
+fn build_dag_id(company: &str, ir: &JobIr, env: &str) -> String {
+    let dc = ir.dag_config.as_ref();
+    let application = dc
+        .and_then(|d| d.application.as_deref())
+        .unwrap_or("")
+        .to_lowercase()
+        .replace(' ', "_");
+    let sub_application = dc
+        .and_then(|d| d.sub_application.as_deref())
+        .unwrap_or("")
+        .to_lowercase()
+        .replace(' ', "_");
+    let folder = ir.source_folder.to_lowercase().replace(' ', "_");
+
+    format!(
+        "{}-{}-{}-{}-{}",
+        company.to_lowercase(),
+        application,
+        sub_application,
+        folder,
+        env.to_lowercase(),
+    )
+}
+
+fn normalize_protocol(raw: &str) -> String {
+    match raw.to_ascii_lowercase().as_str() {
+        "ftp-ssl" | "ftps" => "ftps".into(),
+        "sftp"             => "sftp".into(),
+        _                  => "ftp".into(),
+    }
+}
+
+fn default_port(protocol: &str) -> &'static str {
+    match protocol {
+        "sftp" => "22",
+        _      => "21",
+    }
+}

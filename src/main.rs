@@ -7,6 +7,7 @@ use clap::{Parser, ValueEnum};
 use tracing::info;
 
 use ctm_parser::classifier::classify_job;
+use ctm_parser::codegen::generate_dags;
 use ctm_parser::grouper::{build_dag_groups, write_dag_group, write_dag_single};
 use ctm_parser::ir::{build_ir, build_summary, write_ir_json, write_ir_yaml, write_summary, JobIr};
 use ctm_parser::node_registry::NodeRegistry;
@@ -36,6 +37,22 @@ struct Args {
     /// Log level (error, warn, info, debug, trace)
     #[arg(long, default_value = "info")]
     log_level: String,
+
+    /// Generate Airflow DAG .py files from templates
+    #[arg(long, default_value_t = false)]
+    generate_dags: bool,
+
+    /// Company prefix used in DAG IDs and template COMPANY placeholder
+    #[arg(long, default_value = "mycompany")]
+    company: String,
+
+    /// Deployment environment (dev, sit, uat, prod) — appended to DAG ID
+    #[arg(long, default_value = "dev")]
+    env: String,
+
+    /// Path to templates directory (default: ./templates relative to cwd)
+    #[arg(long, default_value = "templates")]
+    templates_dir: PathBuf,
 }
 
 fn main() -> Result<()> {
@@ -163,6 +180,13 @@ fn main() -> Result<()> {
 
     write_summary(&summary, &args.output)
         .with_context(|| "failed to write migration_summary.json")?;
+
+    // Stage 3 — optional DAG code generation from templates
+    if args.generate_dags {
+        let dags_written = generate_dags(&irs, &args.output, &args.templates_dir, &args.company, &args.env)
+            .with_context(|| "DAG code generation failed")?;
+        info!(dags_written = dags_written, "DAG code generation complete");
+    }
 
     Ok(())
 }

@@ -38,6 +38,9 @@ pub struct CodegenMeta {
     /// Company and env used during generation
     pub company: String,
     pub env: String,
+    /// Path to config override JSON used, if any
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_override: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

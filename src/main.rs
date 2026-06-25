@@ -7,7 +7,7 @@ use clap::{Parser, ValueEnum};
 use tracing::info;
 
 use ctm_parser::classifier::classify_job;
-use ctm_parser::codegen::generate_dags;
+use ctm_parser::codegen::{dump_config, generate_dags};
 use ctm_parser::grouper::{build_dag_groups, write_dag_group, write_dag_single};
 use ctm_parser::ir::{build_ir, build_summary, write_ir_json, write_ir_yaml, write_summary, JobIr};
 use ctm_parser::node_registry::NodeRegistry;
@@ -53,6 +53,10 @@ struct Args {
     /// Path to templates directory (default: ./templates relative to cwd)
     #[arg(long, default_value = "templates")]
     templates_dir: PathBuf,
+
+    /// Dump IR-derived substitution defaults to config/<env>/<job_id>.json for manual editing
+    #[arg(long, default_value_t = false)]
+    dump_config: bool,
 }
 
 fn main() -> Result<()> {
@@ -182,6 +186,12 @@ fn main() -> Result<()> {
         .with_context(|| "failed to write migration_summary.json")?;
 
     // Stage 3 — optional DAG code generation from templates
+    if args.dump_config {
+        let configs_written = dump_config(&irs, &args.output, &args.company, &args.env)
+            .with_context(|| "config dump failed")?;
+        info!(configs_written = configs_written, "config files dumped to output/config/{}/", args.env);
+    }
+
     if args.generate_dags {
         let dags_written = generate_dags(&irs, &args.output, &args.templates_dir, &args.company, &args.env)
             .with_context(|| "DAG code generation failed")?;

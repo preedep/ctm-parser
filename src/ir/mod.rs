@@ -8,6 +8,7 @@ use crate::classifier::JobPattern;
 use crate::error::ParseError;
 use crate::mapper::{build_callbacks, build_dag_config, build_job_variables, DagConfig};
 use crate::model::{ControlMJob, InCondition, OutCondition};
+use crate::node_registry::NodeRegistry;
 
 #[derive(Debug, Serialize)]
 pub struct JobIr {
@@ -70,8 +71,9 @@ pub fn build_ir(
     job: &ControlMJob,
     datacenter: &str,
     pattern: &JobPattern,
+    registry: &NodeRegistry,
 ) -> JobIr {
-    let dag_config = build_dag_config(job, pattern);
+    let dag_config = build_dag_config(job, pattern, registry);
     let callbacks = build_callbacks(job);
     let variables = build_job_variables(job);
     let unmapped_attrs = collect_unmapped(job, pattern);

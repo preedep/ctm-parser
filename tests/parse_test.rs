@@ -2,10 +2,15 @@ use std::io::BufReader;
 
 use ctm_parser::classifier::{classify_job, JobPattern};
 use ctm_parser::ir::{build_ir, build_summary};
+use ctm_parser::node_registry::NodeRegistry;
 use ctm_parser::reader::parse_xml;
 
 fn parse_fixture(xml: &str) -> Vec<ctm_parser::model::ControlMFolder> {
     parse_xml(BufReader::new(xml.as_bytes())).expect("parse failed")
+}
+
+fn default_registry() -> NodeRegistry {
+    NodeRegistry::default()
 }
 
 #[test]
@@ -30,7 +35,7 @@ fn bash_job_ir_has_correct_fields() {
     let folders = parse_fixture(&xml);
     let job = &folders[0].jobs[0];
     let pattern = classify_job(job);
-    let ir = build_ir(job, "neutron", &pattern);
+    let ir = build_ir(job, "neutron", &pattern, &default_registry());
 
     assert_eq!(ir.job_id, "RT_BASH_JOB_001");
     assert_eq!(ir.pattern, "BashJob");
@@ -55,7 +60,7 @@ fn bash_job_sla_derived_from_shout() {
     let folders = parse_fixture(&xml);
     let job = &folders[0].jobs[0];
     let pattern = classify_job(job);
-    let ir = build_ir(job, "neutron", &pattern);
+    let ir = build_ir(job, "neutron", &pattern, &default_registry());
 
     let config = ir.dag_config.as_ref().unwrap();
     assert_eq!(config.sla_sec, Some(3600)); // SHOUT TIME=">060" → 60 min * 60
@@ -77,7 +82,7 @@ fn filewatcher_ir_plugin_config() {
     let folders = parse_fixture(&xml);
     let job = &folders[0].jobs[0];
     let pattern = classify_job(job);
-    let ir = build_ir(job, "neutron", &pattern);
+    let ir = build_ir(job, "neutron", &pattern, &default_registry());
 
     assert_eq!(ir.pattern, "FileWatcher");
     assert!(ir.unmapped_attrs.is_empty(), "unexpected unmapped_attrs: {:?}", ir.unmapped_attrs);
@@ -109,7 +114,7 @@ fn cyclic_job_ir_schedule() {
     let folders = parse_fixture(&xml);
     let job = &folders[0].jobs[0];
     let pattern = classify_job(job);
-    let ir = build_ir(job, "neutron", &pattern);
+    let ir = build_ir(job, "neutron", &pattern, &default_registry());
 
     let config = ir.dag_config.as_ref().unwrap();
     assert_eq!(config.schedule.as_deref(), Some("timedelta:900"));
@@ -137,7 +142,7 @@ fn manual_review_ir_unmapped_attrs_always_present() {
     let folders = parse_fixture(&xml);
     let job = &folders[0].jobs[0];
     let pattern = classify_job(job);
-    let ir = build_ir(job, "neutron", &pattern);
+    let ir = build_ir(job, "neutron", &pattern, &default_registry());
 
     // unmapped_attrs must always be emitted — never missing
     assert!(!ir.unmapped_attrs.is_empty(), "ManualReview job must have non-empty unmapped_attrs");
@@ -156,7 +161,7 @@ fn summary_counts_correctly() {
     for folder in &folders {
         for job in &folder.jobs {
             let pattern = classify_job(job);
-            irs.push(build_ir(job, &folder.datacenter, &pattern));
+            irs.push(build_ir(job, &folder.datacenter, &pattern, &default_registry()));
         }
     }
 

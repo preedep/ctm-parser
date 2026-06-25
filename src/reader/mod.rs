@@ -255,7 +255,7 @@ pub fn parse_xml<R: BufRead>(reader: R) -> Result<Vec<ControlMFolder>, ParseErro
 
             Ok(Event::Eof) => break,
             Err(e) => {
-                let offset = xml.buffer_position() as u64;
+                let offset = xml.buffer_position();
                 return Err(ParseError::Xml { offset, source: e });
             }
             _ => {}
@@ -334,6 +334,8 @@ fn build_job(attrs: HashMap<String, String>, folder: &Option<ControlMFolder>) ->
         appl_type: attrs.get(ATTR_APPL_TYPE).cloned().unwrap_or_default(),
         appl_form: attrs.get(ATTR_APPL_FORM).cloned(),
         cmdline: attrs.get(ATTR_CMDLINE).cloned().filter(|s| !s.is_empty()),
+        memname: attrs.get(ATTR_MEMNAME).cloned().filter(|s| !s.is_empty()),
+        memlib: attrs.get(ATTR_MEMLIB).cloned().filter(|s| !s.is_empty()),
         nodeid: attrs.get(ATTR_NODEID).cloned(),
         run_as: attrs.get(ATTR_RUN_AS).cloned(),
         owner: attrs.get(ATTR_OWNER).cloned(),
@@ -377,10 +379,7 @@ fn build_job(attrs: HashMap<String, String>, folder: &Option<ControlMFolder>) ->
 }
 
 fn flag(attrs: &HashMap<String, String>, key: &str) -> bool {
-    match attrs.get(key).map(|s| s.as_str()) {
-        Some("1") | Some("Y") | Some("True") | Some("true") => true,
-        _ => false,
-    }
+    matches!(attrs.get(key).map(|s| s.as_str()), Some("1") | Some("Y") | Some("True") | Some("true"))
 }
 
 fn parse_u32(attrs: &HashMap<String, String>, key: &str) -> u32 {

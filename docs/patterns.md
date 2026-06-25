@@ -43,9 +43,13 @@ classify_job(job: &ControlMJob) -> JobPattern
 │
 ├─ APPL_TYPE = "FILE_TRANS"
 │   └─ FileTransfer { protocol: derive_protocol(variables) }
-│       %%FTP-CONNTYPE2 = "FTP"  → TransferProtocol::Ftp
-│       %%FTP-CONNTYPE2 = "SFTP" → TransferProtocol::Sftp
-│       otherwise                → TransferProtocol::Unknown → ManualReview
+│       %%FTP-CONNTYPE2 = "FTP"          → TransferProtocol::Ftp
+│       %%FTP-CONNTYPE2 = "FTP-SSL"      → TransferProtocol::FtpSsl
+│       %%FTP-CONNTYPE2 = "SFTP"         → TransferProtocol::Sftp
+│       %%FTP-CONNTYPE2 = "LOCAL"        → TransferProtocol::Local
+│       %%FTP-CONNTYPE2 = "S3"           → TransferProtocol::S3
+│       %%FTP-CONNTYPE2 = "AZURE"/"BLOB" → TransferProtocol::Azure
+│       otherwise                        → TransferProtocol::Unknown → ManualReview
 │
 ├─ APPL_TYPE = "AWS"
 │   └─ AwsJob { service: derive_aws_service(variables) }
@@ -97,8 +101,11 @@ Any of these conditions forces `ManualReview`. Collect ALL reasons into a `Vec<S
 ```rust
 pub enum TransferProtocol {
     Ftp,
+    FtpSsl,
     Sftp,
     Local,
+    S3,    // FTP-CONNTYPE2=S3 → aws s3 cp on agent node
+    Azure, // FTP-CONNTYPE2=AZURE or BLOB → azcopy on agent node
     Unknown(String),
 }
 

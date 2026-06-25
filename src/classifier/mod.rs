@@ -8,6 +8,10 @@ pub enum TransferProtocol {
     FtpSsl,
     Sftp,
     Local,
+    /// FTP-CONNTYPE2=S3 — transfer to/from AWS S3 via `aws s3 cp` on agent node
+    S3,
+    /// FTP-CONNTYPE2=AZURE or BLOB — transfer to/from Azure Blob Storage via `azcopy` on agent node
+    Azure,
     Unknown(String),
 }
 
@@ -18,6 +22,8 @@ impl std::fmt::Display for TransferProtocol {
             Self::FtpSsl => write!(f, "FTP-SSL"),
             Self::Sftp => write!(f, "SFTP"),
             Self::Local => write!(f, "LOCAL"),
+            Self::S3 => write!(f, "S3"),
+            Self::Azure => write!(f, "AZURE"),
             Self::Unknown(s) => write!(f, "{}", s),
         }
     }
@@ -262,19 +268,23 @@ fn derive_transfer_protocol(job: &ControlMJob) -> TransferProtocol {
         .map(|s| s.to_ascii_uppercase());
 
     match conntype.as_deref() {
-        Some("FTP")     => TransferProtocol::Ftp,
-        Some("FTP-SSL") => TransferProtocol::FtpSsl,
-        Some("SFTP")    => TransferProtocol::Sftp,
-        Some("LOCAL")   => TransferProtocol::Local,
-        Some(other)     => TransferProtocol::Unknown(other.to_string()),
+        Some("FTP")             => TransferProtocol::Ftp,
+        Some("FTP-SSL")         => TransferProtocol::FtpSsl,
+        Some("SFTP")            => TransferProtocol::Sftp,
+        Some("LOCAL")           => TransferProtocol::Local,
+        Some("S3")              => TransferProtocol::S3,
+        Some("AZURE") | Some("BLOB") => TransferProtocol::Azure,
+        Some(other)             => TransferProtocol::Unknown(other.to_string()),
         None => {
             let conn1 = job.variables.get("%%FTP-CONNTYPE1").map(|s| s.to_ascii_uppercase());
             match conn1.as_deref() {
-                Some("FTP")     => TransferProtocol::Ftp,
-                Some("FTP-SSL") => TransferProtocol::FtpSsl,
-                Some("SFTP")    => TransferProtocol::Sftp,
-                Some("LOCAL")   => TransferProtocol::Local,
-                _               => TransferProtocol::Ftp,
+                Some("FTP")             => TransferProtocol::Ftp,
+                Some("FTP-SSL")         => TransferProtocol::FtpSsl,
+                Some("SFTP")            => TransferProtocol::Sftp,
+                Some("LOCAL")           => TransferProtocol::Local,
+                Some("S3")              => TransferProtocol::S3,
+                Some("AZURE") | Some("BLOB") => TransferProtocol::Azure,
+                _                       => TransferProtocol::Ftp,
             }
         }
     }

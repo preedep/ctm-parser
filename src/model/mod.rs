@@ -14,6 +14,7 @@ pub const ATTR_APPLICATION: &str = "APPLICATION";
 pub const ATTR_SUB_APPLICATION: &str = "SUB_APPLICATION";
 pub const ATTR_GROUP: &str = "GROUP";
 pub const ATTR_MEMNAME: &str = "MEMNAME";
+pub const ATTR_MEMLIB: &str = "MEMLIB";
 pub const ATTR_DESCRIPTION: &str = "DESCRIPTION";
 pub const ATTR_PARENT_FOLDER: &str = "PARENT_FOLDER";
 pub const ATTR_PRIORITY: &str = "PRIORITY";
@@ -102,6 +103,10 @@ pub struct ControlMJob {
     pub appl_type: String,
     pub appl_form: Option<String>,
     pub cmdline: Option<String>,
+    /// Script filename for TASKTYPE=Job — combined with memlib to form the command when CMDLINE is absent
+    pub memname: Option<String>,
+    /// Directory on agent node containing the MEMNAME script
+    pub memlib: Option<String>,
     pub nodeid: Option<String>,
     pub run_as: Option<String>,
     pub owner: Option<String>,

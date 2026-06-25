@@ -80,18 +80,20 @@ INTERVAL format: `NNNNNu` where u = `M`(minutes) / `H`(hours) / `D`(days).
 | `MAXDAYS` | (dropped) | retention, not Airflow concern |
 | `MAXRUNS` | (dropped) | concurrency handled by Airflow executor |
 
-### CMDLINE transformation (OS jobs)
+### Command resolution (OS jobs)
 
-Raw `CMDLINE` → `BashOperator.bash_command`:
+`TASKTYPE=Command` jobs carry the full command in `CMDLINE`.
+`TASKTYPE=Job` jobs carry the script in `MEMNAME` (filename) + `MEMLIB` (directory). When `CMDLINE` is absent, the mapper assembles the command as `{MEMLIB}/{MEMNAME}`.
 
-1. Replace `%%VARIABLE%%` syntax with Jinja: `%%VAR%%` → `{{ var.value.VAR }}`
-2. Replace date tokens:
+Token substitution is applied to whichever source wins:
+
+1. Replace date tokens:
    - `%%$ODATE` → `{{ ds_nodash }}`
    - `%%$DATE` → `{{ ds }}`
    - `%%$YEAR` → `{{ execution_date.year }}`
    - `%%MONTH` → `{{ execution_date.month }}`
    - `%%DAY` → `{{ execution_date.day }}`
-3. Any remaining `%%` tokens → add name to `unmapped_attrs`; emit as-is in template
+2. Any remaining `%%` tokens → emit as-is (DAG generator handles further substitution)
 
 ---
 
@@ -185,10 +187,21 @@ ON child action mapping:
 
 ### OS jobs (APPL_TYPE=OS)
 
-`TASKTYPE=Command` or `Job`, `CMDLINE` present.
+`TASKTYPE=Command` or `Job`. The command to run is resolved in this order:
+
+| Source | Condition | Resolved command |
+|---|---|---|
+| `CMDLINE` | present and non-empty | use as-is (after `%%` token substitution) |
+| `MEMLIB` + `MEMNAME` | `CMDLINE` absent, both present | `{MEMLIB}/{MEMNAME}` (after substitution) |
+| `MEMNAME` only | `CMDLINE` absent, `MEMLIB` absent | `{MEMNAME}` (after substitution) |
+| none | all absent | `command: null` in IR — DAG generator must flag for manual review |
+
+`TASKTYPE=Job` jobs typically use `MEMNAME`/`MEMLIB` instead of an inline `CMDLINE`. Both routes produce the same `command` field in `DagConfig` and the same `SSHOperator`/`PsrpOperator` in the generated DAG.
 
 ```
-CMDLINE  → BashOperator.bash_command  (after %%VAR substitution)
+CMDLINE  → dag_config.command  (primary; after %%VAR substitution)
+MEMLIB   → dag_config.command  (directory component; combined with MEMNAME)
+MEMNAME  → dag_config.command  (script filename; combined with MEMLIB if present)
 NODEID   → (dropped; Airflow executor handles placement)
 RUN_AS   → (dropped; use Airflow connection or k8s serviceAccount)
 ```

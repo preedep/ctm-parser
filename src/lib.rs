@@ -4,4 +4,5 @@ pub mod grouper;
 pub mod ir;
 pub mod mapper;
 pub mod model;
+pub mod node_registry;
 pub mod reader;

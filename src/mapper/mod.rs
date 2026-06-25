@@ -4,10 +4,14 @@ use serde_json::Value;
 
 use crate::classifier::{AwsServiceType, FileWatchMode, JobPattern, TransferProtocol};
 use crate::model::{ControlMJob, OnAction, ShoutConfig};
+use crate::node_registry::NodeRegistry;
 
 #[derive(Debug, serde::Serialize)]
 pub struct DagConfig {
     pub schedule: Option<String>,
+    /// Raw TIMEFROM value (HHMM) from Control-M — retained so the DAG generator can split
+    /// a folder into per-schedule-group DAGs when jobs have different TIMEFROM values.
+    pub timefrom: Option<String>,
     pub start_date: Option<String>,
     pub end_date: Option<String>,
     pub timezone: Option<String>,
@@ -18,7 +22,12 @@ pub struct DagConfig {
     pub pool: Option<String>,
     pub pool_slots: u32,
     pub owner: Option<String>,
+    /// Airflow UI tags derived from APPLICATION, SUB_APPLICATION, and PARENT_FOLDER
     pub tags: Vec<String>,
+    /// Control-M APPLICATION field — maps to skill's `app_id` for DAG ID construction
+    pub application: Option<String>,
+    /// Control-M SUB_APPLICATION field — maps to skill's `app_code` for DAG ID construction
+    pub sub_application: Option<String>,
     pub sla_sec: Option<u64>,
     pub nodeid: String,
     pub run_as: Option<String>,
@@ -30,14 +39,14 @@ pub struct DagConfig {
     pub plugin_config: Option<Value>,
 }
 
-pub fn build_dag_config(job: &ControlMJob, pattern: &JobPattern) -> Option<DagConfig> {
+pub fn build_dag_config(job: &ControlMJob, pattern: &JobPattern, registry: &NodeRegistry) -> Option<DagConfig> {
     match pattern {
         JobPattern::DependencyGate | JobPattern::ManualReview { .. } => None,
-        _ => Some(build_config(job, pattern)),
+        _ => Some(build_config(job, pattern, registry)),
     }
 }
 
-fn build_config(job: &ControlMJob, pattern: &JobPattern) -> DagConfig {
+fn build_config(job: &ControlMJob, pattern: &JobPattern, registry: &NodeRegistry) -> DagConfig {
     let schedule = derive_schedule(job, pattern);
     let (pool, pool_slots) = derive_pool(job);
     let tags = derive_tags(job);
@@ -48,13 +57,12 @@ fn build_config(job: &ControlMJob, pattern: &JobPattern) -> DagConfig {
         None
     };
 
-    let (operator, command, plugin_config) = derive_operator(job, pattern);
-    // agent_os is a placeholder — "windows" heuristic based on known Windows node prefixes.
-    // The DAG generator must resolve the authoritative OS from the Airflow connection registry.
-    let agent_os = derive_agent_os(job.nodeid.as_deref());
+    let agent_os = registry.agent_os(job.nodeid.as_deref()).to_string();
+    let (operator, command, plugin_config) = derive_operator(job, pattern, &agent_os);
 
     DagConfig {
         schedule,
+        timefrom: job.timefrom.clone(),
         start_date: format_date(job.active_from.as_deref()),
         end_date: format_date(job.active_till.as_deref()),
         timezone: job.timezone.clone(),
@@ -66,6 +74,8 @@ fn build_config(job: &ControlMJob, pattern: &JobPattern) -> DagConfig {
         pool_slots,
         owner: job.owner.clone(),
         tags,
+        application: job.application.clone(),
+        sub_application: job.sub_application.clone(),
         sla_sec,
         nodeid: job.nodeid.clone().unwrap_or_default(),
         run_as: job.run_as.clone(),
@@ -78,6 +88,10 @@ fn build_config(job: &ControlMJob, pattern: &JobPattern) -> DagConfig {
 
 fn derive_schedule(job: &ControlMJob, pattern: &JobPattern) -> Option<String> {
     if let JobPattern::CyclicJob { interval_secs } = pattern {
+        // interval_secs=0 means "downstream cyclic job" — no independent schedule; inherit from entry-point
+        if *interval_secs == 0 {
+            return None;
+        }
         return Some(format!("timedelta:{}", interval_secs));
     }
 
@@ -166,16 +180,14 @@ fn parse_hhmm_minute(s: &str) -> Option<u32> {
 
 fn convert_weekdays(s: &str) -> String {
     // Control-M uses 1=Sunday..7=Saturday; cron uses 0=Sunday..6=Saturday
-    s.replace("1-5", "1-5")  // weekdays already in cron format in dataset
-     .replace("1-7", "*")
+    s.replace("1-7", "*")
 }
 
 fn derive_pool(job: &ControlMJob) -> (Option<String>, u32) {
     if let Some(q) = job.quantitative.first() {
         let pool_name = q.name
             .to_ascii_lowercase()
-            .replace(' ', "_")
-            .replace('-', "_");
+            .replace([' ', '-'], "_");
         (Some(pool_name), q.quant)
     } else {
         (None, 1)
@@ -241,44 +253,24 @@ fn format_date(s: Option<&str>) -> Option<String> {
     }
 }
 
-/// Heuristic agent OS derivation from NODEID.
-/// The DAG generator MUST override this using the Airflow connection registry.
-fn derive_agent_os(nodeid: Option<&str>) -> String {
-    match nodeid {
-        Some(id) => {
-            let lower = id.to_ascii_lowercase();
-            // Known Windows node naming conventions — extend as needed
-            if lower.contains("win") || lower.contains("wnd") || lower.contains("-w-") || lower.ends_with("-w") {
-                "windows".into()
-            } else {
-                "linux".into()
-            }
-        }
-        None => "linux".into(),
-    }
-}
-
 fn ssh_or_psrp(agent_os: &str) -> &'static str {
     if agent_os == "windows" { "PsrpOperator" } else { "SSHOperator" }
 }
 
-fn derive_operator(job: &ControlMJob, pattern: &JobPattern) -> (String, Option<String>, Option<Value>) {
-    let agent_os = derive_agent_os(job.nodeid.as_deref());
-    let remote_op = ssh_or_psrp(&agent_os);
+fn derive_operator(job: &ControlMJob, pattern: &JobPattern, agent_os: &str) -> (String, Option<String>, Option<Value>) {
+    let remote_op = ssh_or_psrp(agent_os);
 
     match pattern {
         JobPattern::BashJob => {
-            let cmd = job.cmdline.as_deref().map(substitute_tokens);
+            let cmd = resolve_command(job);
             (remote_op.into(), cmd, None)
         }
         JobPattern::FileWatcher { mode } => {
             let op = filewatch_operator(mode, remote_op);
             let cfg = build_filewatcher_config(job, mode);
-            (op.into(), None, Some(cfg))
+            (op, None, Some(cfg))
         }
         JobPattern::FileTransfer { protocol } => {
-            // FTP-SSL: use SSHOperator/PsrpOperator with lftp --ftps on agent node
-            // (no native FTP-SSL operator; FTPSensor covers FTP/FTP-SSL for file-wait only)
             let cfg = build_filetrans_config(job, protocol);
             (remote_op.into(), None, Some(cfg))
         }
@@ -298,11 +290,29 @@ fn derive_operator(job: &ControlMJob, pattern: &JobPattern) -> (String, Option<S
         }
         JobPattern::CyclicJob { .. } => {
             // Schedule is timedelta — operator still comes from APPL_TYPE via recursive derive
-            let cmd = job.cmdline.as_deref().map(substitute_tokens);
+            let cmd = resolve_command(job);
             (remote_op.into(), cmd, None)
         }
         JobPattern::DependencyGate => ("EmptyOperator".into(), None, None),
         JobPattern::ManualReview { .. } => ("ManualReview".into(), None, None),
+    }
+}
+
+/// Resolve the command to run on the agent node.
+/// TASKTYPE=Command → use CMDLINE directly.
+/// TASKTYPE=Job     → use MEMLIB/MEMNAME when CMDLINE is absent.
+/// If neither is available, returns None (emitted as command: null in IR).
+fn resolve_command(job: &ControlMJob) -> Option<String> {
+    if let Some(cmd) = job.cmdline.as_deref() {
+        return Some(substitute_tokens(cmd));
+    }
+    match (job.memlib.as_deref(), job.memname.as_deref()) {
+        (Some(lib), Some(name)) => {
+            let lib = lib.trim_end_matches('/').trim_end_matches('\\');
+            Some(substitute_tokens(&format!("{}/{}", lib, name)))
+        }
+        (None, Some(name)) => Some(substitute_tokens(name)),
+        _ => None,
     }
 }
 
@@ -379,18 +389,38 @@ fn build_filetrans_config(job: &ControlMJob, protocol: &TransferProtocol) -> Val
     for i in 1..=transfer_num.min(5) {
         let local_path = vars.get(&format!("%%FTP-LPATH{}", i)).cloned().unwrap_or_default();
         let remote_path = vars.get(&format!("%%FTP-RPATH{}", i)).cloned().unwrap_or_default();
-        let upload = vars.get(&format!("%%FTP-UPLOAD{}", i)).map(|v| v == "1").unwrap_or(true);
+        let upload_flag = vars.get(&format!("%%FTP-UPLOAD{}", i)).map(|v| v.as_str()).unwrap_or("1");
+        let direction = match upload_flag {
+            "1" => "upload",
+            "0" => "download",
+            // "3" = file watcher inside FILE_TRANS — wait for file, then transfer
+            "3" => "watch",
+            _ => "upload",
+        };
         let file_type = vars.get(&format!("%%FTP-TYPE{}", i)).cloned().unwrap_or_else(|| "I".into());
+
+        // Pre/post commands are run on the agent node before/after the transfer.
+        // FTP-PRECOMM{HOST}{N} where HOST=1 (source) or 2 (dest); we collect both.
+        let pre_command = vars.get(&format!("%%FTP-PRECOMM1{}", i))
+            .or_else(|| vars.get(&format!("%%FTP-PRECOMM2{}", i)))
+            .cloned()
+            .unwrap_or_default();
+        let post_command = vars.get(&format!("%%FTP-POSTCOMM1{}", i))
+            .or_else(|| vars.get(&format!("%%FTP-POSTCOMM2{}", i)))
+            .cloned()
+            .unwrap_or_default();
+
         transfers.push(serde_json::json!({
             "local_path": substitute_tokens(&local_path),
             "remote_path": substitute_tokens(&remote_path),
-            "direction": if upload { "upload" } else { "download" },
-            "type": file_type
+            "direction": direction,
+            "type": file_type,
+            "pre_command": pre_command,
+            "post_command": post_command
         }));
     }
 
-    let remote_path = vars.get("%%FTP-RPATH1").map(|s| s.as_str()).unwrap_or("");
-    let transfer_type = derive_transfer_type(remote_path);
+    let transfer_type = derive_transfer_type(protocol);
 
     serde_json::json!({
         "protocol": protocol.to_string(),
@@ -451,14 +481,12 @@ fn build_airflow_config(job: &ControlMJob) -> Value {
     })
 }
 
-/// Derive transfer_type from remote path pattern.
-/// DAG generator may override once it knows both endpoints.
-fn derive_transfer_type(remote_path: &str) -> &'static str {
-    let lower = remote_path.to_ascii_lowercase();
-    if lower.starts_with("s3://") || lower.starts_with("gs://") || lower.contains(".blob.core") {
-        "onprem_to_cloud"
-    } else {
-        "onprem_to_onprem"
+/// Derive transfer_type from the classified protocol.
+/// S3 and Azure are always cloud destinations; all others are on-premise-to-on-premise.
+fn derive_transfer_type(protocol: &TransferProtocol) -> &'static str {
+    match protocol {
+        TransferProtocol::S3 | TransferProtocol::Azure => "onprem_to_cloud",
+        _ => "onprem_to_onprem",
     }
 }
 

@@ -44,6 +44,7 @@ One file per job: `job_{JOBNAME}.json` (or `.yaml`).
 ```json
 {
   "schedule": "0 2 * * *",
+  "timefrom": "0200",
   "start_date": "2024-01-01",
   "end_date": null,
   "timezone": "Asia/Bangkok",
@@ -55,6 +56,8 @@ One file per job: `job_{JOBNAME}.json` (or `.yaml`).
   "pool_slots": 1,
   "owner": "svc_batch",
   "tags": ["MY_FOLDER", "APP_NAME", "SUB_APP"],
+  "application": "APP_NAME",
+  "sub_application": "SUB_APP",
   "sla_sec": null,
   "nodeid": "agent01",
   "run_as": "svc_batch",
@@ -67,7 +70,8 @@ One file per job: `job_{JOBNAME}.json` (or `.yaml`).
 
 | Field | Type | Source | Notes |
 |---|---|---|---|
-| `schedule` | string | derived from DAYS/WEEKDAYS/months or INTERVAL | cron string or `"timedelta:900"` for cyclic |
+| `schedule` | string\|null | derived from DAYS/WEEKDAYS/months or INTERVAL | cron string or `"timedelta:900"` for cyclic; `null` for cyclic with INTERVAL=0 (downstream job, inherits entry-point schedule) |
+| `timefrom` | string\|null | TIMEFROM (raw HHMM) | retained so DAG generator can split a folder into per-schedule-group DAGs when jobs differ |
 | `start_date` | string\|null | ACTIVE_FROM (YYYYMMDD → YYYY-MM-DD) | |
 | `end_date` | string\|null | ACTIVE_TILL | |
 | `timezone` | string\|null | TIMEZONE | |
@@ -79,6 +83,8 @@ One file per job: `job_{JOBNAME}.json` (or `.yaml`).
 | `pool_slots` | int | QUANTITATIVE.QUANT | |
 | `owner` | string\|null | OWNER | |
 | `tags` | array | APPLICATION, SUB_APPLICATION, PARENT_FOLDER | |
+| `application` | string\|null | APPLICATION | maps to skill `app_id` for DAG ID construction |
+| `sub_application` | string\|null | SUB_APPLICATION | maps to skill `app_code` for DAG ID construction |
 | `sla_sec` | int\|null | from SHOUT WHEN=EXECTIME, TIME field | DAG generator converts to `DeadlineAlert(interval=timedelta(seconds=N))` — Airflow 3.x (task-level `sla` was removed in 3.0) |
 | `nodeid` | string | NODEID | agent node name — maps to Airflow connection ID |
 | `run_as` | string\|null | RUN_AS | SSH/PSRP username — stored in connection, referenced here for audit |
@@ -98,7 +104,14 @@ One file per job: `job_{JOBNAME}.json` (or `.yaml`).
   "local_host": "agent01",
   "remote_host": "remote.host.example",
   "transfers": [
-    { "local_path": "/data/*.DAT", "remote_path": "./", "direction": "upload", "type": "I" }
+    {
+      "local_path": "/data/*.DAT",
+      "remote_path": "./",
+      "direction": "upload",
+      "type": "I",
+      "pre_command": "",
+      "post_command": ""
+    }
   ]
 }
 ```

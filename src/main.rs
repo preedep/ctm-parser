@@ -9,6 +9,7 @@ use tracing::info;
 use ctm_parser::classifier::classify_job;
 use ctm_parser::grouper::{build_dag_groups, write_dag_group, write_dag_single};
 use ctm_parser::ir::{build_ir, build_summary, write_ir_json, write_ir_yaml, write_summary, JobIr};
+use ctm_parser::node_registry::NodeRegistry;
 use ctm_parser::reader;
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -60,6 +61,19 @@ fn main() -> Result<()> {
 
     info!(input = ?args.input, output = ?args.output, "starting parse");
 
+    // Load Windows node registry from skill raws — fall back to empty (all Linux) if missing
+    let registry_path = std::path::Path::new(".claude/skills/controlm2airflow/raws/node_id_win.md");
+    let registry = match NodeRegistry::load(registry_path) {
+        Ok(r) => {
+            info!(path = %registry_path.display(), "node registry loaded");
+            r
+        }
+        Err(e) => {
+            tracing::warn!(path = %registry_path.display(), error = %e, "node registry not found — defaulting all nodes to Linux");
+            NodeRegistry::default()
+        }
+    };
+
     let file = File::open(&args.input)
         .with_context(|| format!("cannot open {:?}", args.input))?;
     let folders = reader::parse_xml(BufReader::new(file))
@@ -75,7 +89,7 @@ fn main() -> Result<()> {
     for folder in &folders {
         for job in &folder.jobs {
             let pattern = classify_job(job);
-            let ir = build_ir(job, &folder.datacenter, &pattern);
+            let ir = build_ir(job, &folder.datacenter, &pattern, &registry);
 
             let dest = if ir.pattern == "ManualReview" { &mr_jobs_dir } else { &jobs_dir };
             let write_result = match args.format {

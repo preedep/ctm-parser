@@ -20,7 +20,7 @@ pub fn generate_dags(
     company: &str,
     env: &str,
 ) -> Result<usize, ParseError> {
-    let dags_dir = output_dir.join("auto_converted").join("dags");
+    let dags_dir = output_dir.join("dags");
     std::fs::create_dir_all(&dags_dir).map_err(|e| ParseError::CodegenIo {
         path: dags_dir.display().to_string(),
         source: e,
@@ -390,8 +390,7 @@ fn write_codegen_meta(ir: &JobIr, meta: &CodegenMeta, output_dir: &Path) {
         format!("job__{}__{}", folder, job)
     };
     let ir_path = output_dir
-        .join("auto_converted")
-        .join("jobs")
+        .join("ir")
         .join(format!("{}.json", stem));
 
     let patch = || -> Result<(), Box<dyn std::error::Error>> {

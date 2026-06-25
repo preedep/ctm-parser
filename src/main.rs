@@ -26,7 +26,7 @@ struct Args {
     #[arg(short, long)]
     input: PathBuf,
 
-    /// Output root directory (jobs/ and dag_groups/ are created inside)
+    /// Output root directory
     #[arg(short, long)]
     output: PathBuf,
 
@@ -71,16 +71,16 @@ fn main() -> Result<()> {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&args.log_level));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let ac_dir = args.output.join("auto_converted");
-    let mr_dir = args.output.join("manual_review");
+    // Flat output layout:
+    //   dags/           — generated DAG .py files (deploy target)
+    //   ir/             — auto-converted job IR JSON
+    //   manifests/      — grouper output (groups, groups_external, singles merged)
+    //   manual_review/  — IR files needing human action
+    let ir_dir        = args.output.join("ir");
+    let manifests_dir = args.output.join("manifests");
+    let mr_dir        = args.output.join("manual_review");
 
-    let jobs_dir = ac_dir.join("jobs");
-    let groups_dir = ac_dir.join("dag_groups");
-    let groups_ext_dir = ac_dir.join("dag_groups_external");
-    let singles_dir = ac_dir.join("dag_singles");
-    let mr_jobs_dir = mr_dir.join("jobs");
-
-    for dir in [&jobs_dir, &groups_dir, &groups_ext_dir, &singles_dir, &mr_jobs_dir] {
+    for dir in [&ir_dir, &manifests_dir, &mr_dir] {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("cannot create {:?}", dir))?;
     }
@@ -117,7 +117,7 @@ fn main() -> Result<()> {
             let pattern = classify_job(job);
             let ir = build_ir(job, &folder.datacenter, &pattern, &registry);
 
-            let dest = if ir.pattern == "ManualReview" { &mr_jobs_dir } else { &jobs_dir };
+            let dest = if ir.pattern == "ManualReview" { &mr_dir } else { &ir_dir };
             let write_result = match args.format {
                 OutputFormat::Json => write_ir_json(&ir, dest),
                 OutputFormat::Yaml => write_ir_yaml(&ir, dest),
@@ -137,11 +137,11 @@ fn main() -> Result<()> {
     let mr_count = irs.len() - ac_count;
     info!(auto_converted = ac_count, manual_review = mr_count, "job IR files written");
 
-    // Stage 2 — resolve dependencies, split into groups / groups_external / singles
+    // Stage 2 — resolve dependencies, write all manifests into manifests/
     let result = build_dag_groups(&irs);
 
     for group in &result.groups {
-        if let Err(e) = write_dag_group(group, &groups_dir) {
+        if let Err(e) = write_dag_group(group, &manifests_dir) {
             let msg = format!("failed to write dag_group {}: {}", group.dag_id, e);
             tracing::error!("{}", msg);
             errors.push(msg);
@@ -149,7 +149,7 @@ fn main() -> Result<()> {
     }
 
     for group in &result.groups_external {
-        if let Err(e) = write_dag_group(group, &groups_ext_dir) {
+        if let Err(e) = write_dag_group(group, &manifests_dir) {
             let msg = format!("failed to write dag_group_external {}: {}", group.dag_id, e);
             tracing::error!("{}", msg);
             errors.push(msg);
@@ -157,7 +157,7 @@ fn main() -> Result<()> {
     }
 
     for single in &result.singles {
-        if let Err(e) = write_dag_single(single, &singles_dir) {
+        if let Err(e) = write_dag_single(single, &manifests_dir) {
             let msg = format!("failed to write dag_single {}: {}", single.dag_id, e);
             tracing::error!("{}", msg);
             errors.push(msg);
@@ -191,7 +191,6 @@ fn main() -> Result<()> {
         .with_context(|| "failed to write migration_summary.json")?;
 
     // Stage 3 — optional DAG code generation from templates
-    // Config dir defaults to ./config/<input_stem> so each scenario has its own override folder
     let input_stem = args
         .input
         .file_stem()

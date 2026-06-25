@@ -104,7 +104,7 @@ EXTRA_FLAGS=""
     $EXTRA_FLAGS
 
 # ── verify generated DAG .py files ───────────────────────────────────────────
-DAGS_DIR="${OUTPUT}/auto_converted/dags"
+DAGS_DIR="${OUTPUT}/dags"
 DAG_COUNT=$(ls "$DAGS_DIR" 2>/dev/null | wc -l | tr -d ' ')
 
 VERIFY_PASS=0
@@ -154,15 +154,10 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "  Results"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "  auto_converted/"
-echo "    jobs/                $(ls "${OUTPUT}/auto_converted/jobs/"                2>/dev/null | wc -l | tr -d ' ') IR files"
-echo "    dag_groups/          $(ls "${OUTPUT}/auto_converted/dag_groups/"          2>/dev/null | wc -l | tr -d ' ') self-contained DAG manifests"
-echo "    dag_groups_external/ $(ls "${OUTPUT}/auto_converted/dag_groups_external/" 2>/dev/null | wc -l | tr -d ' ') DAG manifests (needs ExternalTaskSensor)"
-echo "    dag_singles/         $(ls "${OUTPUT}/auto_converted/dag_singles/"         2>/dev/null | wc -l | tr -d ' ') single-task DAG manifests"
-echo "    dags/                $DAG_COUNT generated DAG .py files  ← deploy these"
-echo ""
-echo "  manual_review/"
-echo "    jobs/                $(ls "${OUTPUT}/manual_review/jobs/" 2>/dev/null | wc -l | tr -d ' ') IR files (require human action)"
+echo "  dags/          $DAG_COUNT generated DAG .py files  ← deploy these"
+echo "  ir/            $(ls "${OUTPUT}/ir/"            2>/dev/null | wc -l | tr -d ' ') job IR files"
+echo "  manifests/     $(ls "${OUTPUT}/manifests/"     2>/dev/null | wc -l | tr -d ' ') DAG manifests"
+echo "  manual_review/ $(ls "${OUTPUT}/manual_review/" 2>/dev/null | wc -l | tr -d ' ') jobs requiring human action"
 echo ""
 
 if [ "$DAG_COUNT" -gt 0 ]; then
@@ -171,7 +166,7 @@ if [ "$DAG_COUNT" -gt 0 ]; then
     echo "  Generated DAG files:"
     ls "$DAGS_DIR" | sed 's/^/    /'
     echo ""
-    echo "  Deploy path: $DAGS_DIR"
+    echo "  Deploy path : $DAGS_DIR"
     echo ""
 fi
 

@@ -8,10 +8,8 @@ TARGET="${3:-nonprod}"   # nonprod | production | path/to/file.xml
 COMPANY="${4:-mycompany}"
 ENV="${5:-dev}"
 
-# Resolve input file and output directory by target
 case "$TARGET" in
     nonprod)
-        # Run all XML files under dataset/nonprod/ in sequence
         NONPROD_DIR="${SCRIPT_DIR}/dataset/nonprod"
         OUTPUT="${SCRIPT_DIR}/output/nonprod"
         INPUT_FILES=("${NONPROD_DIR}"/*.xml)
@@ -21,7 +19,6 @@ case "$TARGET" in
         INPUT_FILES=("${SCRIPT_DIR}/dataset/production/export_xml_260612.xml")
         ;;
     *.xml)
-        # Explicit file path passed as third arg
         OUTPUT="${SCRIPT_DIR}/output/custom"
         INPUT_FILES=("$TARGET")
         ;;
@@ -39,6 +36,9 @@ mkdir -p "${OUTPUT}"
 run_one() {
     local INPUT="$1"
     local OUT_DIR="$2"
+    local STEM
+    STEM=$(basename "$INPUT" .xml)
+
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "  Input : $(basename "$INPUT")"
@@ -46,7 +46,7 @@ run_one() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     rm -rf "$OUT_DIR"
     mkdir -p "$OUT_DIR"
-    STEM=$(basename "$INPUT" .xml)
+
     "${SCRIPT_DIR}/target/release/ctm-parser" \
         --input         "$INPUT" \
         --output        "$OUT_DIR" \
@@ -59,16 +59,10 @@ run_one() {
         --generate-dags
 
     echo ""
-    echo "  auto_converted/"
-    echo "    jobs/                $(ls "${OUT_DIR}/auto_converted/jobs/"                2>/dev/null | wc -l | tr -d ' ') job IR files"
-    echo "    dag_groups/          $(ls "${OUT_DIR}/auto_converted/dag_groups/"          2>/dev/null | wc -l | tr -d ' ') self-contained DAGs"
-    echo "    dag_groups_external/ $(ls "${OUT_DIR}/auto_converted/dag_groups_external/" 2>/dev/null | wc -l | tr -d ' ') DAGs with ExternalTaskSensor"
-    echo "    dag_singles/         $(ls "${OUT_DIR}/auto_converted/dag_singles/"         2>/dev/null | wc -l | tr -d ' ') single-task DAGs"
-    echo "    dags/                $(ls "${OUT_DIR}/auto_converted/dags/"               2>/dev/null | wc -l | tr -d ' ') generated DAG .py files"
-    echo ""
-    echo "  manual_review/"
-    echo "    jobs/                $(ls "${OUT_DIR}/manual_review/jobs/" 2>/dev/null | wc -l | tr -d ' ') job IR files (require human action)"
-    echo ""
+    echo "  dags/          $(ls "${OUT_DIR}/dags/"          2>/dev/null | wc -l | tr -d ' ') generated DAG .py files  ← deploy these"
+    echo "  ir/            $(ls "${OUT_DIR}/ir/"            2>/dev/null | wc -l | tr -d ' ') job IR files"
+    echo "  manifests/     $(ls "${OUT_DIR}/manifests/"     2>/dev/null | wc -l | tr -d ' ') DAG manifests"
+    echo "  manual_review/ $(ls "${OUT_DIR}/manual_review/" 2>/dev/null | wc -l | tr -d ' ') jobs requiring human action"
     echo "  migration_summary.json"
 }
 

@@ -24,6 +24,20 @@ pub struct JobIr {
     pub callbacks: Value,
     pub variables: HashMap<String, String>,
     pub unmapped_attrs: Vec<String>,
+    /// Set by the codegen stage after a DAG .py file is generated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codegen: Option<CodegenMeta>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CodegenMeta {
+    /// Template file path relative to templates_dir
+    pub template: String,
+    /// Output DAG file name (basename only)
+    pub dag_file: String,
+    /// Company and env used during generation
+    pub company: String,
+    pub env: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,6 +104,7 @@ pub fn build_ir(
         callbacks,
         variables,
         unmapped_attrs,
+        codegen: None,
     }
 }
 

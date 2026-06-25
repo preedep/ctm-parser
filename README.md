@@ -1,6 +1,6 @@
 # ctm-parser
 
-Rust CLI tool that parses Control-M Enterprise Manager XML exports and converts them to an intermediate JSON/YAML representation (Job IR). The IR is consumed by a downstream DAG generator that produces Apache Airflow 3.x DAG `.py` files.
+Rust CLI tool that parses Control-M Enterprise Manager XML exports and converts them to an intermediate JSON/YAML representation (Job IR — Intermediate Representation). The IR is a normalized, operator-agnostic description of each job that the downstream DAG generator reads to produce Apache Airflow 3.x DAG `.py` files.
 
 **Migration scale:** ~30,000 Control-M jobs → Airflow DAGs
 

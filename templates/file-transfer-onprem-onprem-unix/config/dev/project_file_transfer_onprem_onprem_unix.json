@@ -1,0 +1,36 @@
+{
+    "COMPANY": "mycompany",
+    "PROJECT": "my_project",
+    "APP_CODE": "my_app_code",
+    "DAG_NAME": "my_dag_name",
+    "ENV": "dev",
+    "ACTIVE": true,
+    "SCHEDULE": "0 8 * * *",
+    "ENABLE_EMAIL_NOTIFICATION_SUCCESS": false,
+    "ENABLE_EMAIL_NOTIFICATION_FAIL": true,
+    "EMAIL_LIST": [],
+    "TAGS": ["file-transfer", "onprem-onprem", "unix", "lftp", "dev"],
+
+    "SSH_CONN_ID": "ssh_agent01_dev",
+    "REMOTE_HOST": "agent01",
+
+    "PROTOCOL": "sftp",
+    "DIRECTION": "upload",
+
+    "SOURCE_PATH": "/data/input/*.csv",
+
+    "DEST_HOST": "dest-server",
+    "DEST_PORT": "22",
+    "DEST_USER": "svc_batch",
+    "DEST_PATH": "/data/output/",
+    "PASSWORD_VAR": "FTP_CONN_01_PASS",
+
+    "NEW_NAME": "",
+    "ARCHIVE_PATH": "",
+    "RETENTION_DAYS": "30",
+
+    "PRE_COMMAND": "",
+    "PRE_COMMAND_ARGS": "",
+    "POST_COMMAND": "",
+    "POST_COMMAND_ARGS": ""
+}
